@@ -1,6 +1,8 @@
 mirror-to-github:
   stage: deploy
-  image: alpine/git:latest
+  image:
+    name: alpine/git:latest
+    entrypoint: [""]
   variables:
     GIT_DEPTH: 0
   rules:
