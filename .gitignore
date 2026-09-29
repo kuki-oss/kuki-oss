@@ -1,0 +1,14 @@
+/target
+**/target
+node_modules/
+dist/
+.tanstack
+debug-storybook.log
+*.log
+.env
+.env.local
+*.env
+.DS_Store
+.vscode/
+.idea/
+LICENSE.md
