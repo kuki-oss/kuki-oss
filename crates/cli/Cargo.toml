@@ -1,0 +1,23 @@
+[package]
+name = "kuki-cli"
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "kuki"
+path = "src/main.rs"
+
+[dependencies]
+kuki-api.workspace = true
+kuki-store.workspace = true
+sqlx.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+chrono.workspace = true
+
+[lints]
+workspace = true

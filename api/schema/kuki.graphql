@@ -1,0 +1,648 @@
+# Kuki data-plane contract. Spec 0.2.0, sections 3, 5, 7, 8, 9.
+# Organisation is never an argument: it comes from the credential (API key or OIDC claims)
+# and is applied as the RLS session setting. Admin is a separate schema (spec 3.2).
+
+"RFC 3339, UTC."
+scalar DateTime
+"Arbitrary JSON value. Used only where the shape is defined by a registry JSON Schema."
+scalar JSON
+"Opaque pagination cursor. Never parse it."
+scalar Cursor
+"A string or a number, as in spec 9.1 (KukiFactor.value). Serialised as a JSON string or number."
+scalar FactorValue
+"Decimal as a string, e.g. \"39.000\". Never a JSON float."
+scalar Decimal
+
+"Per-field authorisation. Scopes: decisions:read, decisions:resolve (spec 3.4)."
+directive @requiresScope(scope: String!) on FIELD_DEFINITION
+"Companion to @deprecated carrying the removal date (spec 3.3). Minimum 6 months once public."
+directive @removalDate(
+    date: DateTime!
+) on FIELD_DEFINITION | ENUM_VALUE | ARGUMENT_DEFINITION | INPUT_FIELD_DEFINITION
+
+# ---------------------------------------------------------------- errors
+"""
+Closed registry for `errors[].extensions.code` (spec 3.3). This enum is not referenced by any
+field; the server registers it explicitly so it appears in the SDL and generated SDKs.
+Extensions may also carry `retryAfterSeconds` (RATE_LIMITED) and `cost` (cost-limit rejections).
+"""
+enum ErrorCode {
+    UNAUTHENTICATED
+    FORBIDDEN
+    VALIDATION_FAILED
+    RATE_LIMITED
+    CONFLICT
+    NOT_FOUND
+    INTERNAL
+}
+
+# ── error subcodes (closed ErrorCode stays closed) ───────────────────
+"OPEN ENUM. Appears in errors[].extensions.reason alongside the above ErrorCode."
+enum ErrorReason {
+    COST_LIMIT_EXCEEDED
+    DEPTH_LIMIT_EXCEEDED
+    PAGE_SIZE_EXCEEDED
+    PERSISTED_QUERY_REQUIRED
+    STALE_VERSION
+    INVALID_STATE_TRANSITION
+}
+
+# ---------------------------------------------------------------- relay
+type PageInfo {
+    hasNextPage: Boolean!
+    hasPreviousPage: Boolean!
+    startCursor: Cursor
+    endCursor: Cursor
+}
+
+# ---------------------------------------------------------------- tenancy
+type Organisation {
+    id: ID!
+    slug: String!
+    name: String!
+    "Data residency region code."
+    region: String
+}
+
+type OrgUnit {
+    id: ID!
+    "ltree path, e.g. hq.region_east.depot_nairobi."
+    path: String!
+    name: String!
+    attrs: JSON!
+}
+
+type OrgUnitEdge {
+    node: OrgUnit!
+    cursor: Cursor!
+}
+type OrgUnitConnection {
+    edges: [OrgUnitEdge!]!
+    pageInfo: PageInfo!
+}
+
+# ---------------------------------------------------------------- recommendation (spec 9.1)
+"""
+OPEN ENUM: clients MUST tolerate unknown values.
+"""
+enum KukiRecommendationStatus {
+    PENDING
+    ACCEPTED
+    REJECTED
+    EXPIRED
+    SUPERSEDED
+    EXECUTING
+    EXECUTED
+    FAILED
+    "Core edition only (spec 7.5, 8.3). `resolvedBy` is `policy:<id>`."
+    AUTO_EXECUTED
+}
+
+"OPEN ENUM."
+enum Tier {
+    T0
+    T1
+    T2
+    T3
+    T4
+    T5
+}
+
+"OPEN ENUM."
+enum ConfidenceKind {
+    "Deterministic rule: confidence measures input quality (T0, T1)."
+    DATA_QUALITY
+    PREDICTIVE_INTERVAL
+    "Only after a calibration check (spec 10.1.7)."
+    CALIBRATED_PROBABILITY
+}
+
+"OPEN ENUM."
+enum EvidenceKind {
+    EVENT
+    OBJECT
+    LINK
+    METRIC
+}
+
+type Impact {
+    value: Decimal!
+    unit: String!
+}
+
+type EvidenceRef {
+    kind: EvidenceKind!
+    id: String!
+    asOf: DateTime!
+    note: String
+    "Resolves the reference through the API. Costs more than a scalar field."
+    target: EvidenceTarget @requiresScope(scope: "decisions:read")
+}
+
+union EvidenceTarget =
+    | OntologyEvent
+    | OntologyObject
+    | OntologyLink
+    | MetricValue
+
+type KukiFactor {
+    label: String!
+    value: FactorValue!
+    unit: String
+    "[0,1]. Present ONLY for model-derived factors (SHAP normalised)."
+    weight: Float
+    "Present only for model-derived factors. OPEN ENUM."
+    direction: FactorDirection
+    evidence: [EvidenceRef!]!
+}
+
+enum FactorDirection {
+    RAISES
+    LOWERS
+}
+
+type KukiRationale {
+    "Always present. Template-rendered per decision type, deterministic (spec 9.4)."
+    summary: String!
+    "At least one."
+    factors: [KukiFactor!]!
+    "[0,1]."
+    confidence: Float!
+    confidenceKind: ConfidenceKind!
+    "e.g. 'if not acted on: projected stockout in 6 days'."
+    counterfactual: String
+    "Optional LLM paragraph. Never replaces `summary`; dropped if the verifier rejects it (spec 9.4)."
+    narrative: String
+}
+
+type Provenance {
+    generatorId: String!
+    generatorVersion: String!
+    tier: Tier!
+    "e.g. inventory@1.0.0"
+    pack: String!
+    ontologyVersion: Int!
+    "sha256 of the OrgDecisionConfig."
+    configHash: String!
+    asOf: DateTime!
+    "sha256 of the canonical serialisation of the inputs read. Makes invariant I1 auditable."
+    inputDigest: String!
+    "T3+: registry id and content hash."
+    modelArtefact: String
+}
+
+# ---- actions. Built-in packs get typed members; everything else uses GenericAction (spec 9.3).
+type KukiAction {
+    proposed: Boolean!
+    actionType: String
+    payloadSchemaRef: String!
+    payload: ActionPayload!
+}
+
+union ActionPayload =
+    | ReplenishPayload
+    | SchedulingConflictPayload
+    | AnomalyPayload
+    | GenericPayload
+
+"Payload from spec 10.1.2."
+type ReplenishPayload {
+    itemId: ID!
+    supplierId: ID
+    quantity: Decimal!
+    daysUntilStockout: Float!
+    targetCoverageDays: Float!
+}
+
+"PROVISIONAL payload. Spec 10.2 defines detection and slot choice but not the payload."
+type SchedulingConflictPayload {
+    resourceId: ID!
+    holderBookingId: ID!
+    conflictingBookingId: ID!
+    proposedSlot: ProposedSlot
+}
+
+type ProposedSlot {
+    slotId: ID!
+    resourceId: ID!
+    startsAt: DateTime!
+    endsAt: DateTime!
+}
+
+"PROVISIONAL payload. Spec 10.3 defines detection (robust z-score) but not the payload."
+type AnomalyPayload {
+    seriesId: ID!
+    observedAt: DateTime!
+    robustZ: Float!
+}
+
+type GenericPayload {
+    payload: JSON!
+}
+
+enum ActionExecutionStatus {
+    QUEUED
+    RUNNING
+    SUCCEEDED
+    FAILED
+    COMPENSATED
+    CANCELLED
+}
+
+"Spec 8.1."
+type ActionExecution {
+    id: ID!
+    actionType: String!
+    status: ActionExecutionStatus!
+    "e.g. builtin:draft_po, webhook:https://..."
+    adapter: String!
+    attempts: Int!
+    "User id, or policy:<id> for auto-exec."
+    createdBy: String!
+    createdAt: DateTime!
+    finishedAt: DateTime
+    result: JSON
+}
+
+"PROVISIONAL. Snapshot appended on a material change (spec 7.4)."
+type RecommendationRevision {
+    revisedAt: DateTime!
+    snapshot: JSON!
+}
+
+"""
+PROVISIONAL. Why a recommendation left `pending`. Examples: reasonCode `condition_cleared`
+(expiry), a rejection reason code, or an accept note in `note`. See "spec gaps" in the PR notes.
+"""
+type RecommendationResolution {
+    reasonCode: String
+    note: String
+    "True when the operator accepted with a modified payload (label: accepted_modified)."
+    payloadOverridden: Boolean!
+}
+
+type KukiRecommendation {
+    id: ID!
+    organisationId: ID!
+    orgUnitId: ID
+    "Namespaced: inventory.replenish, scheduling.conflict, ..."
+    decisionType: String!
+    dedupKey: String!
+    action: KukiAction!
+    rationale: KukiRationale!
+    "[0,1]."
+    urgency: Float!
+    impact: Impact
+    provenance: Provenance!
+    status: KukiRecommendationStatus!
+    "User id, or policy:<id>."
+    resolvedBy: String
+    resolution: RecommendationResolution
+    createdAt: DateTime!
+    lastConfirmedAt: DateTime!
+    resolvedAt: DateTime
+    expiresAt: DateTime
+    "Bounded, not paginated."
+    revisions: [RecommendationRevision!]!
+    "Bounded, not paginated."
+    executions: [ActionExecution!]! @requiresScope(scope: "decisions:read")
+    "Increment on every row change. Dedupe key for clients and webhooks."
+    version: Int!
+    updatedAt: DateTime!
+}
+
+type KukiRecommendationEdge {
+    node: KukiRecommendation!
+    cursor: Cursor!
+}
+type KukiRecommendationConnection {
+    edges: [KukiRecommendationEdge!]!
+    pageInfo: PageInfo!
+}
+
+enum RecommendationOrder {
+    "urgency desc, created desc. Matches the inbox index."
+    INBOX
+    CREATED_DESC
+}
+
+input RecommendationFilter {
+    "Default: [PENDING]."
+    statuses: [KukiRecommendationStatus!]
+    decisionTypes: [String!]
+    "ltree descendant match (path <@ value). Intersected with the caller's scope."
+    orgUnitPath: String
+    minUrgency: Float
+    "Server floor min_confidence_for_display still applies (default 0.30)."
+    minConfidence: Float
+}
+
+# ---------------------------------------------------------------- ontology (read-only)
+type OntologyObject {
+    id: ID!
+    type: String!
+    typeVersion: Int!
+    orgUnitId: ID
+    "e.g. {\"erp\":\"SKU-204\"}"
+    externalIds: JSON!
+    "Fields tagged sensitive may be redacted after crypto-shredding."
+    attrs: JSON!
+    validFrom: DateTime!
+    validTo: DateTime
+    recordedAt: DateTime!
+}
+
+type OntologyLink {
+    id: ID!
+    type: String!
+    srcId: ID!
+    dstId: ID!
+    attrs: JSON!
+    validFrom: DateTime!
+    validTo: DateTime
+}
+
+type OntologyEvent {
+    id: ID!
+    type: String!
+    typeVersion: Int!
+    subjectId: ID!
+    "Event time."
+    occurredAt: DateTime!
+    "Ingest time."
+    recordedAt: DateTime!
+    payload: JSON!
+    "Correction pointer (invariant I5)."
+    supersedes: ID
+    source: String!
+}
+
+type MetricValue {
+    name: String!
+    version: Int!
+    subjectId: ID!
+    asOf: DateTime!
+    value: JSON!
+    unit: String
+}
+
+type ObjectType {
+    name: String!
+    version: Int!
+    jsonSchema: JSON!
+}
+type EventType {
+    name: String!
+    version: Int!
+    subjectType: String!
+    jsonSchema: JSON!
+}
+type DecisionTypeDefinition {
+    name: String!
+    pack: String!
+    payloadSchemaRef: String!
+    payloadSchema: JSON!
+}
+
+type OntologyObjectEdge {
+    node: OntologyObject!
+    cursor: Cursor!
+}
+type OntologyObjectConnection {
+    edges: [OntologyObjectEdge!]!
+    pageInfo: PageInfo!
+}
+type OntologyLinkEdge {
+    node: OntologyLink!
+    cursor: Cursor!
+}
+type OntologyLinkConnection {
+    edges: [OntologyLinkEdge!]!
+    pageInfo: PageInfo!
+}
+type OntologyEventEdge {
+    node: OntologyEvent!
+    cursor: Cursor!
+}
+type OntologyEventConnection {
+    edges: [OntologyEventEdge!]!
+    pageInfo: PageInfo!
+}
+type ObjectTypeEdge {
+    node: ObjectType!
+    cursor: Cursor!
+}
+type ObjectTypeConnection {
+    edges: [ObjectTypeEdge!]!
+    pageInfo: PageInfo!
+}
+type EventTypeEdge {
+    node: EventType!
+    cursor: Cursor!
+}
+type EventTypeConnection {
+    edges: [EventTypeEdge!]!
+    pageInfo: PageInfo!
+}
+type DecisionTypeDefinitionEdge {
+    node: DecisionTypeDefinition!
+    cursor: Cursor!
+}
+type DecisionTypeDefinitionConnection {
+    edges: [DecisionTypeDefinitionEdge!]!
+    pageInfo: PageInfo!
+}
+
+enum LinkDirection {
+    OUT
+    IN
+    BOTH
+}
+
+# ---------------------------------------------------------------- query
+"""
+`first` defaults to 25, max 100. Larger values fail with VALIDATION_FAILED and reason
+PAGE_SIZE_EXCEEDED. Forward pagination only.
+"""
+type Query {
+    organisation: Organisation! @requiresScope(scope: "decisions:read")
+    orgUnits(
+        first: Int = 25
+        after: Cursor
+        underPath: String
+    ): OrgUnitConnection! @requiresScope(scope: "decisions:read")
+
+    recommendation(id: ID!): KukiRecommendation
+        @requiresScope(scope: "decisions:read")
+    recommendations(
+        first: Int = 25
+        after: Cursor
+        filter: RecommendationFilter
+        orderBy: RecommendationOrder = INBOX
+    ): KukiRecommendationConnection! @requiresScope(scope: "decisions:read")
+
+    ontologyObject(id: ID!, asOf: DateTime): OntologyObject
+        @requiresScope(scope: "decisions:read")
+    ontologyObjects(
+        type: String!
+        first: Int = 25
+        after: Cursor
+        orgUnitPath: String
+        asOf: DateTime
+    ): OntologyObjectConnection! @requiresScope(scope: "decisions:read")
+    ontologyLinks(
+        objectId: ID!
+        type: String
+        direction: LinkDirection = BOTH
+        first: Int = 25
+        after: Cursor
+        asOf: DateTime
+    ): OntologyLinkConnection! @requiresScope(scope: "decisions:read")
+    ontologyEvents(
+        subjectId: ID
+        type: String
+        occurredFrom: DateTime
+        occurredTo: DateTime
+        first: Int = 25
+        after: Cursor
+        asOf: DateTime
+    ): OntologyEventConnection! @requiresScope(scope: "decisions:read")
+    metric(name: String!, subjectId: ID!, asOf: DateTime): MetricValue
+        @requiresScope(scope: "decisions:read")
+
+    objectTypes(first: Int = 25, after: Cursor): ObjectTypeConnection!
+        @requiresScope(scope: "decisions:read")
+    eventTypes(first: Int = 25, after: Cursor): EventTypeConnection!
+        @requiresScope(scope: "decisions:read")
+    decisionTypes(
+        first: Int = 25
+        after: Cursor
+    ): DecisionTypeDefinitionConnection! @requiresScope(scope: "decisions:read")
+
+    viewer: Viewer!
+    recommendationSummary(orgUnitPath: String): RecommendationSummary!
+        @requiresScope(scope: "decisions:read")
+
+    """
+    Catch-up feed for reconnecting clients (graphql-ws has no replay).
+    Ordered by updatedAt ASC. Clients MUST re-read with a small overlap
+    (suggest 10 s) and dedupe on (id, version), because commit order is not
+    strictly updatedAt order.
+    """
+    recommendationChanges(
+        updatedAfter: DateTime!
+        first: Int = 25
+        after: Cursor
+    ): KukiRecommendationConnection! @requiresScope(scope: "decisions:read")
+
+    ontologyObjectByExternalId(
+        system: String!
+        id: String!
+        asOf: DateTime
+    ): OntologyObject @requiresScope(scope: "decisions:read")
+}
+
+# ---------------------------------------------------------------- mutation
+"""
+OPEN ENUM. PROPOSED values. Rejection is NOT ground truth for models (spec 7.5): the code
+distinguishes 'wrong' from 'right but already done'.
+"""
+enum RejectionReasonCode {
+    WRONG_RECOMMENDATION
+    ALREADY_HANDLED
+    NOT_NOW
+    NOT_APPLICABLE
+    OTHER
+}
+
+input AcceptRecommendationInput {
+    recommendationId: ID!
+    note: String
+    "Validated against the payload schema. Stored alongside the original."
+    payloadOverride: JSON
+    "Compare-and-set: fails with CONFLICT/STALE_VERSION if the row moved on."
+    ifVersion: Int
+    clientMutationId: String!
+}
+
+input RejectRecommendationInput {
+    recommendationId: ID!
+    reasonCode: RejectionReasonCode!
+    reasonText: String
+    clientMutationId: String!
+    ifVersion: Int
+}
+
+type AcceptRecommendationPayload {
+    recommendation: KukiRecommendation!
+    "Present when an action execution was created in the same transaction."
+    actionExecution: ActionExecution
+    clientMutationId: String!
+}
+
+type RejectRecommendationPayload {
+    recommendation: KukiRecommendation!
+    clientMutationId: String!
+}
+
+"""
+Invalid state transitions (e.g. accepting a non-pending recommendation) fail with CONFLICT and
+reason INVALID_STATE_TRANSITION.
+"""
+type Mutation {
+    acceptRecommendation(
+        input: AcceptRecommendationInput!
+    ): AcceptRecommendationPayload! @requiresScope(scope: "decisions:resolve")
+    rejectRecommendation(
+        input: RejectRecommendationInput!
+    ): RejectRecommendationPayload! @requiresScope(scope: "decisions:resolve")
+}
+
+# ---------------------------------------------------------------- subscription
+input SubscriptionFilter {
+    decisionTypes: [String!]
+    orgUnitPath: String
+}
+
+type RecommendationStatusChange {
+    recommendation: KukiRecommendation!
+    previousStatus: KukiRecommendationStatus!
+}
+
+"""
+graphql-ws. Authenticate in the `connection_init` payload, never by cookie (spec 3.4).
+Delivery is at-least-once (outbox): consumers dedupe on (recommendation id, version).
+Event names are PROPOSED, derived from outbox topics (recommendation.created / .updated).
+"""
+type Subscription {
+    recommendationCreated(filter: SubscriptionFilter): KukiRecommendation!
+        @requiresScope(scope: "decisions:read")
+    "Material change updated in place (spec 7.4)."
+    recommendationUpdated(filter: SubscriptionFilter): KukiRecommendation!
+        @requiresScope(scope: "decisions:read")
+    recommendationStatusChanged(
+        filter: SubscriptionFilter
+    ): RecommendationStatusChange! @requiresScope(scope: "decisions:read")
+}
+
+# ---------------------------------------------------------------- viewer
+type Viewer {
+    principalId: String!
+    scopes: [String!]!
+    "ltree path, null = whole organisation"
+    orgUnitScopePath: String
+    organisation: Organisation!
+}
+
+type DecisionTypeCount {
+    decisionType: String!
+    count: Int!
+}
+
+type RecommendationSummary {
+    pendingTotal: Int!
+    pendingByDecisionType: [DecisionTypeCount!]!
+    acceptedLast30d: Int!
+    rejectedLast30d: Int!
+    asOf: DateTime!
+}

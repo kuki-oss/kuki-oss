@@ -1,0 +1,679 @@
+openapi: 3.1.0
+info:
+  title: Kuki REST API (ingest)
+  version: 0.2.0-draft
+  summary: Event and bulk ingest, quarantine, health.
+  description: |
+    Spec 0.2.0, sections 3.2, 3.3, 6.1, 6.2. Reads, decisions and subscriptions are GraphQL.
+    Every write requires `Idempotency-Key`. Errors are RFC 9457 problem details whose `code`
+    comes from the closed registry shared with GraphQL. Every response carries `X-Request-Id`.
+    Send your own (1-128 visible ASCII characters) to correlate a request with server logs,
+    or quote the returned one when reporting a problem. Rate limiting: each API key has a
+    token bucket (default: bursts of 200 requests, refilling at 100 per second). Every
+    authenticated request costs one token regardless of its size, and authenticated responses
+    carry `RateLimit-Limit` and `RateLimit-Remaining`. A request over budget is refused with
+    429 RATE_LIMITED and `Retry-After`; nothing is written, so retry with the same
+    `Idempotency-Key`. The limit is enforced per server process: a deployment with several
+    replicas allows each replica's budget separately, and a restart refills the buckets.
+    Requests with invalid credentials are not counted, so put a reverse proxy in front for
+    per-IP limits.
+servers:
+  - url: "{host}"
+    variables:
+      host: { default: "http://localhost:8080" }
+tags:
+  - name: Ingest
+    description: Append events, objects and links; manage backfills.
+  - name: Quarantine
+    description: Inspect and replay rows that failed validation at ingest.
+  - name: Health
+    description: Liveness and readiness probes. No authentication.
+security:
+  - apiKey: []
+
+paths:
+  /v1/events:
+    post:
+      tags: [Ingest]
+      operationId: ingestEvents
+      summary: Append events to the ledger
+      description: |
+        Two body formats. `application/json` carries `{events:[...]}` (max 1000, PROPOSED).
+        `application/x-ndjson` carries one EventInput per line; `index` in the result is the
+        zero-based line number. Processing is chunked server-side into transactions of at most
+        1000 events. Partial success is explicit: the request returns 202 even when some rows
+        are rejected. Request-level failures (auth, malformed body, rate limit) use problem details.
+        Replaying the same key and body returns the stored response with `Idempotency-Replayed: true`.
+        The same key with a different body is a 409 CONFLICT. If a request fails part-way, chunks already
+        committed stay committed; retry with the same `Idempotency-Key`. With `mode=backfill`, a backfill
+        that is not open (completing, completed or expired) is refused with 409 CONFLICT; stored responses
+        for earlier keys still replay.
+      security:
+        - apiKey: [ingest:write]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/Mode"
+        - $ref: "#/components/parameters/BackfillId"
+        - $ref: "#/components/parameters/ReturnMode"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IngestEventsRequest" }
+          application/x-ndjson:
+            schema:
+              type: string
+              description: Newline-delimited JSON, one EventInput object per line. OpenAPI 3.1 cannot express per-line schemas.
+      responses:
+        "202":
+          description: |
+            Accepted. Every row in `accepted` is durably committed to the ledger before this
+            response is sent. Evaluation runs asynchronously afterwards, so no recommendation
+            is guaranteed to exist yet. Rows in `rejected` were not written; they are in quarantine.
+          headers:
+            Idempotency-Replayed: { $ref: "#/components/headers/IdempotencyReplayed" }
+            RateLimit-Limit: { $ref: "#/components/headers/RateLimitLimit" }
+            RateLimit-Remaining: { $ref: "#/components/headers/RateLimitRemaining" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IngestResult" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/Internal" }
+
+  /v1/backfills/{backfillId}/complete:
+    post:
+      tags: [Ingest]
+      operationId: completeBackfill
+      summary: Mark a backfill finished
+      description: |
+        PROPOSED. Spec 6.2 suppresses recommendation creation until a backfill completes and then
+        runs one evaluation pass per entity, but defines no completion signal. This is it.
+      security:
+        - apiKey: [ingest:write]
+      parameters:
+        - { name: backfillId, in: path, required: true, schema: { type: string, maxLength: 128 } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "202":
+          description: |
+            Completion started. Retrying is safe: an already-completing or completed backfill
+            returns 202 with its current status. An expired backfill is a 409.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [backfillId, status]
+                properties:
+                  backfillId: { type: string }
+                  status: { type: string, enum: [completing, completed] }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/Internal" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/quarantine:
+    get:
+      tags: [Quarantine]
+      operationId: listQuarantine
+      summary: List rejected rows awaiting correction
+      description: |
+        PROPOSED path and scope. Backed by ingest_quarantine (spec 6.2). Lists only rows still
+        awaiting correction (status `quarantined`); rows already replayed are not returned.
+        Not available to keys limited to an org-unit subtree (403), because quarantined rows
+        hold raw input from any unit.
+      security:
+        - apiKey: [ingest:read]
+      parameters:
+        - { name: batchId, in: query, schema: { type: string, format: uuid } }
+        - { name: first, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+        - { name: after, in: query, description: Opaque cursor., schema: { type: string } }
+      responses:
+        "200":
+          description: A page of quarantined rows.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QuarantinePage" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/Internal" }
+
+  /v1/quarantine/{quarantineId}/replay:
+    post:
+      tags: [Quarantine]
+      operationId: replayQuarantined
+      summary: Replay a quarantined row, optionally corrected
+      description: |
+        Re-runs one quarantined row through the processor for the batch kind that rejected it
+        (events, objects or links). Omit the body to replay the original row unchanged, or send
+        a corrected row under the key that matches the kind (`event`, `object` or `link`).
+        The replay is a one-row batch with `kind` "replay" and writes as live data (no backfill id).
+        A row that is still invalid comes back in `rejected` with its original `quarantineId`
+        and stays quarantined. A successful replay marks the row `replayed`; replaying it again
+        under a different key is a 409. Not available to keys limited to an org-unit subtree
+        (403), because quarantined rows hold raw input from any unit.
+      security:
+        - apiKey: [ingest:write]
+      parameters:
+        - { name: quarantineId, in: path, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 0
+              maxProperties: 1
+              additionalProperties: false
+              properties:
+                event: { $ref: "#/components/schemas/EventInput" }
+                object: { $ref: "#/components/schemas/ObjectInput" }
+                link: { $ref: "#/components/schemas/LinkInput" }
+      responses:
+        "202":
+          description: Replayed. A still-invalid row comes back in `rejected` and stays quarantined.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/IngestResult"
+                  - $ref: "#/components/schemas/UpsertResult"
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/Internal" }
+
+  /v1/health/live:
+    get:
+      tags: [Health]
+      operationId: healthLive
+      summary: Liveness
+      security: []
+      responses:
+        "200":
+          description: Process is up.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+  /v1/health/ready:
+    get:
+      tags: [Health]
+      operationId: healthReady
+      summary: Readiness (database reachable, migrations applied)
+      security: []
+      responses:
+        "200":
+          description: Ready.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+        "503":
+          description: Not ready.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/objects/batch:
+    post:
+      tags: [Ingest]
+      operationId: upsertObjects
+      summary: Upsert objects (versioned, ledger-backed)
+      description: |
+        Resolves by `id` or any `externalIds` pair (spec 5.6). Created when unmatched; a new
+        version (valid_to on the old one) when attrs differ; no-op when identical. Written as
+        system events `kuki.object.upserted` so `objects` stays a projection of the ledger (I5).
+        Same body formats, chunking, partial success and idempotency as /v1/events. `unchanged`
+        rows write nothing and emit no event. An update's `validFrom` must be later than
+        the current version's (default: receipt time). Matching several objects, or a different object
+        than `id`, is AMBIGUOUS_SUBJECT. A key limited to an org-unit subtree must send `orgUnitPath`,
+        and a unit outside the subtree is OUT_OF_SCOPE. An object's `type` cannot change.
+        `externalIds` merge with the existing ones (incoming wins per system).
+      security: [{ apiKey: [ingest:write] }]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/ReturnMode"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [objects]
+              properties:
+                objects:
+                  type: array
+                  minItems: 1
+                  maxItems: 1000
+                  items: { $ref: "#/components/schemas/ObjectInput" }
+          application/x-ndjson:
+            schema: { type: string }
+      responses:
+        "202":
+          description: |
+            Accepted. Every row in `accepted` is durably committed to the ledger before this
+            response is sent. Evaluation runs asynchronously afterwards, so no recommendation
+            is guaranteed to exist yet. Rows in `rejected` were not written; they are in quarantine.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpsertResult" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/Internal" }
+
+  /v1/links/batch:
+    post:
+      tags: [Ingest]
+      operationId: upsertLinks
+      summary: Upsert links between objects
+      description: |
+        A link is identified by (`type`, `src`, `dst`). Created when none is current; a new version
+        when `attrs` differ; no-op when identical. Endpoints resolve like event subjects (`id` or
+        `externalId`); a missing or out-of-scope endpoint is UNRESOLVED_SUBJECT, several matches
+        AMBIGUOUS_SUBJECT. An update's `validFrom` must be later than the current version's.
+        Written as system events `kuki.link.upserted`. The `id` in the result is the id of the
+        link's current version and changes on every update. `type` is free-form (no link type
+        registry yet) and there is no way to end a link yet.
+        Same body formats, chunking, partial success and idempotency as /v1/events.
+      security: [{ apiKey: [ingest:write] }]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/ReturnMode"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [links]
+              properties:
+                links:
+                  type: array
+                  minItems: 1
+                  maxItems: 1000
+                  items: { $ref: "#/components/schemas/LinkInput" }
+          application/x-ndjson:
+            schema: { type: string }
+      responses:
+        "202":
+          description: |
+            Accepted. Every row in `accepted` is durably committed to the ledger before this
+            response is sent. Evaluation runs asynchronously afterwards, so no recommendation
+            is guaranteed to exist yet. Rows in `rejected` were not written; they are in quarantine.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpsertResult" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/Internal" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+
+  /v1/backfills/{backfillId}:
+    get:
+      tags: [Ingest]
+      operationId: getBackfill
+      summary: Backfill status (open, completing, completed, expired)
+      security: [{ apiKey: [ingest:read] }]
+      parameters:
+        - { name: backfillId, in: path, required: true, schema: { type: string, maxLength: 128 } }
+      responses:
+        "200":
+          description: Status.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [backfillId, status, openedAt]
+                properties:
+                  backfillId: { type: string }
+                  status: { type: string, enum: [open, completing, completed, expired] }
+                  openedAt: { type: string, format: date-time }
+                  expiresAt: { type: string, format: date-time }
+                  eventCount: { type: integer }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/Internal" }
+
+components:
+  securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+      bearerFormat: Kuki API key
+      description: Key scoped to an organisation (optionally an org unit). Stored hashed, shown once.
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Stored 24 hours with the response hash. Applies to the whole request.
+      schema: { type: string, minLength: 1, maxLength: 255 }
+    Mode:
+      name: mode
+      in: query
+      required: false
+      description: |
+        `backfill` writes events with their true occurredAt and a fresh recordedAt, tagged with a
+        backfill marker. Requires `backfillId`; `backfillId` without `mode=backfill` is rejected.
+      schema: { type: string, enum: [live, backfill], default: live }
+    ReturnMode:
+      name: return
+      in: query
+      description: "`summary` returns counts and rejected rows only (no per-row accepted list)."
+      schema: { type: string, enum: [full, summary], default: full }
+    BackfillId:
+      name: backfillId
+      in: query
+      required: false
+      description: |
+        PROPOSED. Required when mode=backfill, and rejected without it. Client-chosen id (1-128
+        visible ASCII characters) grouping the load. The backfill opens on its first batch and
+        expires 7 days after the last accepted batch.
+      schema: { type: string, minLength: 1, maxLength: 128 }
+  headers:
+    IdempotencyReplayed:
+      description: "`true` when this is a stored response."
+      schema: { type: boolean }
+    RateLimitLimit: { schema: { type: integer }, description: "Size of the key's token bucket, in requests." }
+    RateLimitRemaining: { schema: { type: integer }, description: Whole requests left in the bucket. }
+    RetryAfter: { schema: { type: integer }, description: Seconds to wait. }
+
+  schemas:
+    IngestEventsRequest:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/EventInput" }
+    EventInput:
+      type: object
+      required: [type, typeVersion, subject, occurredAt, payload]
+      additionalProperties: false
+      properties:
+        type: { type: string, description: "Registered event type, e.g. stock.delta." }
+        typeVersion: { type: integer, minimum: 1, description: Unknown versions are rejected. }
+        subject: { $ref: "#/components/schemas/SubjectRef" }
+        occurredAt: { type: string, format: date-time, description: "Event time, RFC 3339 UTC." }
+        payload: { type: object, description: Validated against the event type JSON Schema. }
+        supersedes:
+          type: string
+          format: uuid
+          description: Correction pointer. The original stays in the ledger.
+    SubjectRef:
+      description: Resolved at ingest by exact match on id or external id (spec 5.6). Fuzzy matching is never automatic.
+      oneOf:
+        - type: object
+          required: [id]
+          additionalProperties: false
+          properties: { id: { type: string, format: uuid } }
+        - type: object
+          required: [externalId]
+          additionalProperties: false
+          properties:
+            externalId:
+              type: object
+              required: [system, id]
+              properties:
+                system: { type: string }
+                id: { type: string }
+    IngestResult:
+      type: object
+      required: [batchId, acceptedCount, rejected]
+      properties:
+        batchId: { type: string, format: uuid }
+        acceptedCount: { type: integer, minimum: 0 }
+        backfillId: { type: string }
+        accepted:
+          description: Per-row results. Omitted when `return=summary`.
+          type: array
+          items:
+            type: object
+            required: [index, eventId]
+            properties:
+              index: { type: integer, minimum: 0 }
+              eventId:
+                type: string
+                format: uuid
+                description: |
+                  Deterministic for a given organisation, `Idempotency-Key` and `index`. A retry
+                  returns the same ids, which is what makes a retry after a partial failure safe.
+        rejected:
+          type: array
+          items:
+            type: object
+            required: [index, code, message, quarantineId]
+            properties:
+              index: { type: integer, minimum: 0 }
+              code: { $ref: "#/components/schemas/IngestRejectionCode" }
+              message: { type: string }
+              field: { type: string, description: JSON pointer to the offending field. }
+              quarantineId: { type: string, format: uuid }
+    IngestRejectionCode:
+      type: string
+      description: |
+        OPEN ENUM; clients must tolerate unknown values. PROPOSED set derived from spec 6.1/6.2.
+        Data-quality gates in spec 6.4 (future-dated, negative stock) are metrics, not rejections.
+      enum: [SCHEMA_INVALID, UNKNOWN_EVENT_TYPE, UNKNOWN_OBJECT_TYPE, UNKNOWN_TYPE_VERSION, UNRESOLVED_SUBJECT, AMBIGUOUS_SUBJECT, OUT_OF_SCOPE, MALFORMED_LINE]
+    ObjectInput:
+      type: object
+      required: [type, typeVersion, externalIds, attrs]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: |
+            Optional. When omitted and the object does not yet exist, the server derives a
+            deterministic id from the organisation, Idempotency-Key and index, so retries return
+            the same id. When the object already exists (matched by `externalIds`), its existing id is used.
+        type: { type: string }
+        typeVersion: { type: integer, minimum: 1 }
+        externalIds:
+          type: object
+          minProperties: 1
+          additionalProperties: { type: string }
+        orgUnitPath:
+          type: string
+          pattern: '^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$'
+        attrs: { type: object }
+        validFrom: { type: string, format: date-time, description: Defaults to receipt time. }
+    LinkInput:
+      type: object
+      required: [type, src, dst]
+      additionalProperties: false
+      properties:
+        type: { type: string }
+        src: { $ref: "#/components/schemas/SubjectRef" }
+        dst: { $ref: "#/components/schemas/SubjectRef" }
+        attrs: { type: object }
+        validFrom: { type: string, format: date-time }
+    UpsertResult:
+      type: object
+      required: [batchId, acceptedCount, rejected]
+      properties:
+        batchId: { type: string, format: uuid }
+        acceptedCount: { type: integer, minimum: 0 }
+        accepted:
+          description: Per-row results. Omitted when `return=summary`.
+          type: array
+          items:
+            type: object
+            required: [index, id, outcome]
+            properties:
+              index: { type: integer, minimum: 0 }
+              id:
+                type: string
+                format: uuid
+                description: |
+                  The object id (stable) for /v1/objects/batch. For /v1/links/batch, the id of the
+                  link's current version, which changes on update.
+              outcome: { type: string, enum: [created, updated, unchanged] }
+        rejected:
+          type: array
+          items:
+            type: object
+            required: [index, code, message, quarantineId]
+            properties:
+              index: { type: integer }
+              code: { $ref: "#/components/schemas/IngestRejectionCode" }
+              message: { type: string }
+              field: { type: string, description: JSON pointer to the offending field. }
+              quarantineId: { type: string, format: uuid }
+    QuarantinePage:
+      type: object
+      required: [items, pageInfo]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/QuarantineItem" }
+        pageInfo:
+          type: object
+          required: [hasNextPage]
+          properties:
+            hasNextPage: { type: boolean }
+            endCursor: { type: [string, "null"] }
+    QuarantineItem:
+      type: object
+      required: [id, batchId, index, receivedAt, code, message, status, raw]
+      properties:
+        id: { type: string, format: uuid }
+        batchId: { type: string, format: uuid }
+        index: { type: integer, minimum: 0 }
+        receivedAt: { type: string, format: date-time }
+        code: { $ref: "#/components/schemas/IngestRejectionCode" }
+        message: { type: string }
+        field: { type: string }
+        status: { type: string, enum: [quarantined, replayed] }
+        raw: { description: The row as received. Not necessarily a valid EventInput. }
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [ok, degraded] }
+        version: { type: string }
+
+    ProblemCode:
+      type: string
+      description: Closed registry, identical to the GraphQL ErrorCode enum (spec 3.3).
+      enum: [UNAUTHENTICATED, FORBIDDEN, VALIDATION_FAILED, RATE_LIMITED, CONFLICT, NOT_FOUND, INTERNAL]
+    Problem:
+      type: object
+      description: RFC 9457 problem details.
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri-reference }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string, format: uri-reference }
+        code: { $ref: "#/components/schemas/ProblemCode" }
+        reason:
+          type: string
+          description: OPEN ENUM subcode, same values as the GraphQL ErrorReason. Clients must tolerate unknown values.
+        retryAfterSeconds: { type: integer }
+        errors:
+          type: array
+          description: Field-level detail for VALIDATION_FAILED.
+          items:
+            type: object
+            required: [pointer, message]
+            properties:
+              pointer: { type: string }
+              message: { type: string }
+
+  responses:
+    ValidationFailed:
+      description: Malformed or invalid request. Maps to VALIDATION_FAILED.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Unauthenticated:
+      description: Missing or invalid credentials. Maps to UNAUTHENTICATED.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Forbidden:
+      description: Credential lacks the scope or org-unit reach. Maps to FORBIDDEN.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    NotFound:
+      description: Maps to NOT_FOUND.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Conflict:
+      description:
+        Idempotency key reused with a different body, or the target is in a state that
+        refuses the request (for example a backfill that is not open). Maps to CONFLICT.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    PayloadTooLarge:
+      description: Body exceeds the byte limit. Maps to VALIDATION_FAILED.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    RateLimited:
+      description: Token bucket empty. Maps to RATE_LIMITED.
+      headers:
+        Retry-After: { $ref: "#/components/headers/RetryAfter" }
+        RateLimit-Limit: { $ref: "#/components/headers/RateLimitLimit" }
+        RateLimit-Remaining: { $ref: "#/components/headers/RateLimitRemaining" }
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Internal:
+      description: Maps to INTERNAL.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+
+webhooks:
+  recommendation:
+    post:
+      operationId: recommendationWebhook
+      summary: Recommendation lifecycle event (created, updated, status changed)
+      description: |
+        At-least-once; consumers dedupe on `Kuki-Delivery-Id` and on (`recommendation.id`,
+        `recommendation.version`). Verify `Kuki-Signature` = `t=<unix>,v1=<hex>` where
+        v1 = HMAC-SHA256(secret, "<t>.<raw body>"). Reject if |now - t| > 300 s.
+      parameters:
+       - { name: Kuki-Signature, in: header, required: true, schema: { type: string } }
+       - { name: Kuki-Delivery-Id, in: header, required: true, schema: { type: string, format: uuid } }
+       - { name: Kuki-Event, in: header, required: true, schema: { type: string } }
+      requestBody:
+       required: true
+       content:
+         application/json:
+           schema:
+             type: object
+             required: [event, organisationId, recommendation]
+             properties:
+               event: { type: string, enum: [recommendation.created, recommendation.updated, recommendation.status_changed] }
+               organisationId: { type: string, format: uuid }
+               recommendation: { type: object, description: "Same shape as the GraphQL KukiRecommendation, camelCase." }
+      responses:
+        "2XX": { description: Acknowledged. Any other status triggers retry with backoff. }

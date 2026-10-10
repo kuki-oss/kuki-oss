@@ -12,3 +12,5 @@ debug-storybook.log
 .vscode/
 .idea/
 LICENSE.md
+deploy/docker/.env
+deploy/docker/secrets/

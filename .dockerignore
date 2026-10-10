@@ -1,0 +1,5 @@
+target
+.git
+**/.env
+deploy/docker/secrets
+node_modules

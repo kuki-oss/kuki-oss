@@ -1,0 +1,28 @@
+nextest-version = { required = "0.9.131" }
+
+[store]
+dir = "target/nextest"
+
+# Local: stop at the first failure, show failures immediately
+[profile.default]
+fail-fast = true
+slow-timeout = { period = "30s" }
+status-level = "pass"
+final-status-level = "flaky"
+failure-output = "immediate"
+success-output = "never"
+
+# CI: run everything, no retries, a flaky pass counts as a failure, and hung tests are killed.
+[profile.ci]
+inherits = "default"
+fail-fast = false
+retries = 0
+flaky-result = "fail"
+slow-timeout = { period = "60s", terminate-after = 3, grace-period = "10s" }
+status-level = "fail"
+final-status-level = "slow"
+failure-output = "immediate-final"
+
+[profile.ci.junit]
+path = "junit.xml"
+store-failure-output = true

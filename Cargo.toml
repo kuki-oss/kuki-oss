@@ -1,47 +1,55 @@
 [workspace]
-members = [
-    "backend/libraries/common",
-    "backend/services/api_service",
-    "backend/services/ingestion_worker",
-    "backend/services/kuki_engine",
-]
 resolver = "2"
+members = [
+    "crates/store",
+    "crates/types",
+    "crates/extension",
+    "crates/api",
+    "crates/cli",
+    "crates/ingest",
+]
+
+[workspace.package]
+version = "0.0.0"
+license = "AGPL-3.0-only"
+edition = "2024"
+publish = false
 
 [workspace.dependencies]
-common = { path = "backend/libraries/common" }
-axum = { version = "0.8", features = ["json"] }
-tokio = { version = "1", features = ["full"] }
-sqlx = { version = "0.8", features = [
-    "runtime-tokio-rustls",
-    "postgres",
-    "uuid",
-    "chrono",
-    "json",
-    "migrate",
-    "bigdecimal",
-] }
-uuid = { version = "1", features = ["v4", "serde"] }
+futures = "0.3"
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json"] }
+uuid = { version = "1", features = ["v7", "v4", "v5", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+hex = "0.4"
+rust_decimal = { version = "1", features = ["serde-str"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-dotenvy = "0.15"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sha2 = "0.10"
+async-trait = "0.1"
+kuki-types = { path = "crates/types" }
+kuki-store = { path = "crates/store" }
+kuki-api = { path = "crates/api" }
+kuki-ingest = { path = "crates/ingest" }
+semver = "1"
 thiserror = "2"
-anyhow = "1.0.102"
-tower-http = { version = "0.6", features = ["cors", "trace"] }
-reqwest = { version = "0.13.3", features = ["json"] }
-aws-config = "1.8.16"
-aws-sdk-s3 = "1.132.0"
-bigdecimal = { version = "0.4", features = ["serde-json"] }
-argon2 = "0.5.3"
-jsonwebtoken = { version = "10.4.0", features = ["rust_crypto", "use_pem"] }
-rand = { version = "0.10.1", features = ["std"] }
-hex = "0.4.3"
-sha2 = "0.11.0"
-rustls = { version = "0.23.40", features = ["ring"] }
-async-graphql = { version = "7", features = ["dataloader", "bigdecimal", "uuid", "chrono"] }
-async-graphql-axum = "7.2.1"
-base64 = "0.22.1"
-csv = "1"
-surrealdb = { version = "3.2.4", features = ["protocol-ws"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net", "signal", "macros"] }
+axum = "0.8"
+hmac = "0.12"
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.7.1", features = ["sensitive-headers"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "ansi"] }
+subtle = "2"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"]}
+base64 = "0.22"
+jsonschema = { version = "0.58", default-features = false }
+serde_path_to_error = "0.1"
+clap = { version = "4", features = ["derive"] }
+async-graphql = { version = "7.2.1", default-features = false, features = ["chrono"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

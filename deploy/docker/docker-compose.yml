@@ -1,0 +1,103 @@
+name: kuki
+
+services:
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: kuki
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+    secrets: [pg_password]
+    volumes:
+      - pgdata:/var/lib/postgresql
+    ports:
+      - "127.0.0.1:${KUKI_PG_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d kuki"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # DEV ONLY: dev mode is in-memory and auto-unsealed. Restarting it loses the
+  # Transit key, which invalidates every API key. Production needs real storage.
+  openbao:
+    image: ${OPENBAO_IMAGE:-openbao/openbao:latest}
+    restart: unless-stopped
+    command: ["server", "-dev"]
+    cap_add: [IPC_LOCK]
+    environment:
+      BAO_ADDR: http://127.0.0.1:8200
+      BAO_DEV_ROOT_TOKEN_ID: ${BAO_ROOT_TOKEN:?run scripts/dev-up.sh first}
+      BAO_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    ports:
+      - "127.0.0.1:8200:8200"
+    healthcheck:
+      test: ["CMD", "bao", "status"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    image: kuki-oss:dev
+    pull_policy: never
+    command: ["migrate"]
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    environment:
+      KUKI_MIGRATE_DATABASE_URL_FILE: /run/secrets/database_url
+      RUST_LOG: ${RUST_LOG:-info}
+    secrets: [database_url]
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  # Operator CLI (`kuki keys ...`, `kuki orgs ...`). Not started by `up`; run it with
+  #   docker compose run --rm -T admin keys list
+  admin:
+    image: kuki-oss:dev
+    pull_policy: never
+    profiles: ["tools"]
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    environment:
+      KUKI_MIGRATE_DATABASE_URL_FILE: /run/secrets/database_url
+      KUKI_BAO_ADDR: http://openbao:8200
+      KUKI_BAO_TOKEN_FILE: /run/secrets/bao_token
+      KUKI_KEY_ENV: ${KUKI_KEY_ENV:-live}
+      RUST_LOG: ${RUST_LOG:-warn}
+    secrets: [database_url, bao_token]
+    depends_on:
+      postgres: { condition: service_healthy }
+      openbao: { condition: service_healthy }
+    restart: "no"
+
+  kuki:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    image: kuki-oss:dev
+    restart: unless-stopped
+    command: ["serve"]
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    environment:
+      KUKI_BIND: 0.0.0.0:8080
+      KUKI_DATABASE_URL_FILE: /run/secrets/database_url
+      KUKI_BAO_ADDR: http://openbao:8200
+      KUKI_BAO_TOKEN_FILE: /run/secrets/bao_token
+      KUKI_KEY_ENV: ${KUKI_KEY_ENV:-live}
+      KUKI_RATE_LIMIT_BURST: ${KUKI_RATE_LIMIT_BURST:-200}
+      KUKI_RATE_LIMIT_REFILL_PER_SECOND: ${KUKI_RATE_LIMIT_REFILL_PER_SECOND:-100}
+      RUST_LOG: ${RUST_LOG:-info}
+    secrets: [database_url, bao_token]
+    ports:
+      - "127.0.0.1:${KUKI_PORT:-8080}:8080"
+    depends_on:
+      postgres: { condition: service_healthy }
+      openbao: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+
+secrets:
+  pg_password: { file: ./secrets/pg_password }
+  database_url: { file: ./secrets/database_url }
+  bao_token: { file: ./secrets/bao_token }
+
+volumes:
+  pgdata: {}
