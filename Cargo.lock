@@ -1536,6 +1536,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "kuki-engine"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "kuki-extension",
+ "kuki-types",
+ "semver",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "kuki-extension"
 version = "0.0.0"
 dependencies = [

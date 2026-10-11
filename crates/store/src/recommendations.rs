@@ -349,9 +349,10 @@ pub async fn transition(
         return Ok(Transitioned::Unchanged);
     }
     if let Some(expected) = t.expected_version
-        && expected != version {
-            return Err(TransitionError::VersionConflict { current: version });
-        }
+        && expected != version
+    {
+        return Err(TransitionError::VersionConflict { current: version });
+    }
     if !from.can_transition_to(t.to) {
         return Err(TransitionError::Illegal { from, to: t.to });
     }

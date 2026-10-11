@@ -8,6 +8,7 @@ members = [
     "crates/cli",
     "crates/ingest",
     "crates/outbox",
+    "crates/engine",
 ]
 
 [workspace.package]
@@ -32,6 +33,7 @@ kuki-store = { path = "crates/store" }
 kuki-api = { path = "crates/api" }
 kuki-ingest = { path = "crates/ingest" }
 kuki-outbox = { path = "crates/outbox" }
+kuki-extension = { path = "crates/extension" }
 semver = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net", "signal", "macros"] }
