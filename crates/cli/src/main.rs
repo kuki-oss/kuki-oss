@@ -32,6 +32,8 @@ enum Command {
         #[command(subcommand)]
         cmd: admin::KeysCmd,
     },
+    /// Publish the transactional outbox to Kafka
+    Outbox,
 }
 
 #[tokio::main]
@@ -50,6 +52,7 @@ async fn main() -> ExitCode {
         Command::Migrate => run_migrate().await,
         Command::Orgs { cmd } => admin::run_orgs(cmd).await,
         Command::Keys { cmd } => admin::run_keys(cmd).await,
+        Command::Outbox => run_outbox().await,
     };
 
     match result {
@@ -64,6 +67,11 @@ async fn main() -> ExitCode {
 async fn run_serve() -> Res {
     let config = ApiConfig::from_env()?;
     serve(config).await?;
+    Ok(())
+}
+
+async fn run_outbox() -> Res {
+    kuki_outbox::run_from_env().await?;
     Ok(())
 }
 

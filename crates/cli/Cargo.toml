@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 kuki-api.workspace = true
 kuki-store.workspace = true
+kuki-outbox.workspace = true
 sqlx.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing.workspace = true
