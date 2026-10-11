@@ -1541,11 +1541,15 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "futures",
  "kuki-extension",
+ "kuki-store",
  "kuki-types",
  "semver",
  "serde",
  "serde_json",
+ "sqlx",
+ "thiserror",
  "tokio",
  "uuid",
 ]

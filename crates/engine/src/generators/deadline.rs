@@ -153,9 +153,10 @@ impl DecisionGenerator for DeadlineAtRisk {
         let mut out = Vec::new();
         for obj in objects {
             if let ScopeSpec::Entities(ids) = scope
-                && !ids.contains(&obj.id) {
-                    continue;
-                }
+                && !ids.contains(&obj.id)
+            {
+                continue;
+            }
             if !is_open(&obj, &p) {
                 continue;
             }
