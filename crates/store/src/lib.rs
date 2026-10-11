@@ -6,6 +6,7 @@ pub mod links;
 pub mod objects;
 pub mod ontology;
 pub mod outbox;
+pub mod recommendations;
 pub mod session;
 pub mod tenant;
 

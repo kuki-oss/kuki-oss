@@ -90,11 +90,12 @@ impl Relay {
         // before anything newer and per-key order holds.
         let mut rest = &batch[out.acked..];
         if !failure.retriable
-            && let Some((head, tail)) = rest.split_first() {
-                outbox::mark_dead(conn, head.id, &failure.reason).await?;
-                tracing::error!(outbox_id = head.id, reason = %failure.reason, "outbox message parked as dead");
-                rest = tail;
-            }
+            && let Some((head, tail)) = rest.split_first()
+        {
+            outbox::mark_dead(conn, head.id, &failure.reason).await?;
+            tracing::error!(outbox_id = head.id, reason = %failure.reason, "outbox message parked as dead");
+            rest = tail;
+        }
         if !rest.is_empty() {
             outbox::release(conn, &ids(rest)).await?;
         }
