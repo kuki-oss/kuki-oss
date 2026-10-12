@@ -4,9 +4,11 @@
 mod catalog;
 mod connection;
 mod guard;
+mod metric;
 mod ontology;
 mod problems;
 mod query;
+mod recommendations;
 mod registry;
 
 use std::sync::OnceLock;

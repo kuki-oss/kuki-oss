@@ -19,6 +19,7 @@ thiserror.workspace = true
 uuid.workspace = true
 tracing.workspace = true
 kuki-store.workspace = true
+kuki-types.workspace = true
 sqlx.workspace = true
 subtle.workspace = true
 reqwest.workspace = true

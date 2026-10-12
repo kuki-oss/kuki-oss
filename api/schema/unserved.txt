@@ -1,10 +1,5 @@
 # Contract root fields not yet served. Delete a line when the field ships.
 # The graphql_contract test fails if this list and reality disagree.
-Query.recommendation
-Query.recommendations
-Query.metric
-Query.recommendationSummary
-Query.recommendationChanges
 Mutation.acceptRecommendation
 Mutation.rejectRecommendation
 Subscription.recommendationCreated

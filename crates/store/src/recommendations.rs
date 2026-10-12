@@ -41,7 +41,7 @@ pub struct RecommendationRow {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
-const COLS: &str = "id, organisation_id, org_unit_id, decision_type, dedup_key, status, \
+pub(crate) const COLS: &str = "id, organisation_id, org_unit_id, decision_type, dedup_key, status, \
                     urgency::float8 AS urgency, confidence::float8 AS confidence, rationale_summary, \
                     body, provenance, revision_history, resolution, version, created_at, \
                     last_confirmed_at, updated_at, resolved_at, resolved_by, expires_at";

@@ -21,6 +21,8 @@ pub struct QueryRoot(
     TenancyQuery,
     super::ontology::OntologyQuery,
     super::catalog::CatalogQuery,
+    super::recommendations::RecommendationQuery,
+    super::metric::MetricQuery,
 );
 
 #[derive(SimpleObject)]
