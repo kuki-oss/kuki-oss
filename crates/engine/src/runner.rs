@@ -1,6 +1,6 @@
 //! The evaluator service. Two loops share one `Evaluator`:
 //!
-//! * drain: claims entities that have been dirty for at least the debounce, coalesces them per
+//!  * drain: claims entities that have been dirty for at least the debounce, coalesces them per
 //!    organisation (a very large set becomes a full run) and runs the evaluator for each. If a run
 //!    fails outright the entities are put back.
 //!  * tick: every `tick`, runs every configured organisation in full. This is the backstop for
@@ -306,10 +306,11 @@ impl Runner {
         let mut leader: Option<Leader> = None;
         loop {
             if let Some(l) = leader.as_mut()
-                && !l.alive().await {
-                    tracing::warn!("lost the scheduler lock");
-                    leader = None;
-                }
+                && !l.alive().await
+            {
+                tracing::warn!("lost the scheduler lock");
+                leader = None;
+            }
             if leader.is_none() {
                 match Leader::try_acquire(&self.pool).await {
                     Ok(Some(l)) => {

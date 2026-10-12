@@ -156,9 +156,10 @@ impl DecisionGenerator for DeadlineAtRisk {
             let mut found = Vec::new();
             for id in ids.iter().collect::<std::collections::BTreeSet<_>>() {
                 if let Some(o) = ctx.view.object(*id).await?
-                    && o.type_name == p.object_type {
-                        found.push(o);
-                    }
+                    && o.type_name == p.object_type
+                {
+                    found.push(o);
+                }
             }
             found
         } else {
