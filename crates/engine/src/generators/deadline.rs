@@ -134,8 +134,12 @@ impl DecisionGenerator for DeadlineAtRisk {
         &[]
     }
 
-    fn scope(&self, _trigger: &Trigger, _ctx: &DecisionContext) -> ScopeSpec {
-        ScopeSpec::All
+    fn scope(&self, trigger: &Trigger, _ctx: &DecisionContext) -> ScopeSpec {
+        if trigger.entities.is_empty() {
+            ScopeSpec::All
+        } else {
+            ScopeSpec::Entities(trigger.entities.clone())
+        }
     }
 
     async fn evaluate(
@@ -147,16 +151,23 @@ impl DecisionGenerator for DeadlineAtRisk {
         let p = Params::from_value(params_json.clone())?;
         let horizon = Duration::hours(p.horizon_hours);
 
-        let mut objects = ctx.view.objects_of_type(&p.object_type, None).await?;
+        let mut objects = if let ScopeSpec::Entities(ids) = scope {
+            // Event-driven run: read only what changed. Ids of other object types are ignored.
+            let mut found = Vec::new();
+            for id in ids.iter().collect::<std::collections::BTreeSet<_>>() {
+                if let Some(o) = ctx.view.object(*id).await?
+                    && o.type_name == p.object_type {
+                        found.push(o);
+                    }
+            }
+            found
+        } else {
+            ctx.view.objects_of_type(&p.object_type, None).await?
+        };
         objects.sort_by_key(|o| o.id);
 
         let mut out = Vec::new();
         for obj in objects {
-            if let ScopeSpec::Entities(ids) = scope
-                && !ids.contains(&obj.id)
-            {
-                continue;
-            }
             if !is_open(&obj, &p) {
                 continue;
             }
@@ -478,5 +489,32 @@ mod tests {
     fn it_declares_no_capabilities() {
         assert!(DeadlineAtRisk.requires().is_empty());
         assert_eq!(DeadlineAtRisk.tier(), Tier::T0);
+    }
+
+    #[test]
+    fn the_scope_follows_the_trigger() {
+        let ctx = ctx_at(clock(), params(), vec![]);
+        let trig = |entities| Trigger {
+            organisation_id: Uuid::nil(),
+            topic: "t".into(),
+            entities,
+        };
+        assert_eq!(DeadlineAtRisk.scope(&trig(vec![]), &ctx), ScopeSpec::All);
+        assert_eq!(
+            DeadlineAtRisk.scope(&trig(vec![Uuid::from_u128(1)]), &ctx),
+            ScopeSpec::Entities(vec![Uuid::from_u128(1)])
+        );
+    }
+
+    #[tokio::test]
+    async fn scoped_entities_of_another_type_are_ignored() {
+        let mut other = case(5, Some(clock() - Duration::hours(1)), "open");
+        other.type_name = "task".into();
+        let c = ctx_at(clock(), params(), vec![other]);
+        let out = DeadlineAtRisk
+            .evaluate(&c, &ScopeSpec::Entities(vec![Uuid::from_u128(5)]))
+            .await
+            .unwrap();
+        assert!(out.is_empty());
     }
 }

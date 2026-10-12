@@ -19,6 +19,8 @@ sqlx.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 jsonschema.workspace = true
+tokio.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

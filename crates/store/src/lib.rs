@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod backfill;
 pub mod catalog;
+pub mod dirty;
 pub mod engine_reads;
 pub mod ingest;
 pub mod links;

@@ -34,6 +34,29 @@ enum Command {
     },
     /// Publish the transactional outbox to Kafka
     Outbox,
+    /// Run the decision evaluator
+    Evaluate {
+        #[command(subcommand)]
+        cmd: EvaluateCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum EvaluateCmd {
+    /// Run the evaluator service: reacts to changes and re-evaluates on a schedule.
+    Run,
+    /// Evaluate one organisation once and print the report (KUKI_MIGRATE_DATABASE_URL resolves the organisation).
+    Once {
+        /// Organisation slug or id.
+        #[arg(long)]
+        org: String,
+    },
+    /// Install the built-in decision types for an organisation (KUKI_MIGRATE_DATABASE_URL).
+    Install {
+        /// Organisation slug or id.
+        #[arg(long)]
+        org: String,
+    },
 }
 
 #[tokio::main]
@@ -53,6 +76,7 @@ async fn main() -> ExitCode {
         Command::Orgs { cmd } => admin::run_orgs(cmd).await,
         Command::Keys { cmd } => admin::run_keys(cmd).await,
         Command::Outbox => run_outbox().await,
+        Command::Evaluate { cmd } => run_evaluate(cmd).await,
     };
 
     match result {
@@ -72,6 +96,19 @@ async fn run_serve() -> Res {
 
 async fn run_outbox() -> Res {
     kuki_outbox::run_from_env().await?;
+    Ok(())
+}
+
+async fn run_evaluate(cmd: EvaluateCmd) -> Res {
+    match cmd {
+        EvaluateCmd::Run => kuki_engine::run::run_from_env().await?,
+        EvaluateCmd::Once { org } => println!("{}", kuki_engine::run::once_from_env(&org).await?),
+        EvaluateCmd::Install { org } => {
+            for name in kuki_engine::run::install_from_env(&org).await? {
+                println!("installed {name}");
+            }
+        }
+    }
     Ok(())
 }
 

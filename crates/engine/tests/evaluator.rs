@@ -763,3 +763,70 @@ async fn due_recommendations_expire_at_the_start_of_a_run(admin: PgPool) {
     assert_eq!(report.expired, 1);
     assert_eq!(status_of(&admin, new.id).await, "expired");
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn an_event_driven_run_clears_only_the_entities_it_covers(admin: PgPool) {
+    let app = app_pool(&admin).await;
+    let org = deadline_org(&admin, "acme", "active", 20, true).await;
+    put_obj(
+        &admin,
+        org,
+        1,
+        case_attrs("open", -5),
+        "2026-10-01T00:00:00Z",
+    )
+    .await;
+    put_obj(
+        &admin,
+        org,
+        2,
+        case_attrs("open", -2),
+        "2026-10-01T00:00:00Z",
+    )
+    .await;
+    let ev = builtin_evaluator(&app);
+    ev.run(&trigger(org), now()).await.unwrap();
+
+    new_version(
+        &admin,
+        org,
+        1,
+        case_attrs("done", -5),
+        "2026-10-11T11:00:00Z",
+    )
+    .await;
+    new_version(
+        &admin,
+        org,
+        2,
+        case_attrs("done", -2),
+        "2026-10-11T11:00:00Z",
+    )
+    .await;
+
+    let scoped = Trigger {
+        organisation_id: org,
+        topic: "ontology.changes".into(),
+        entities: vec![u(1)],
+    };
+    let report = ev.run(&scoped, now() + Duration::minutes(1)).await.unwrap();
+    assert_eq!(report.generators[0].cleared, 1);
+
+    let status = |n: u128| {
+        let admin = admin.clone();
+        async move {
+            sqlx::query_scalar::<_, String>("SELECT status FROM recommendations WHERE organisation_id = $1 AND dedup_key LIKE '%' || $2")
+                .bind(org)
+                .bind(u(n).to_string())
+                .fetch_one(&admin)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(status(1).await, "expired");
+    assert_eq!(
+        status(2).await,
+        "pending",
+        "case 2 closed too, but this run did not cover it"
+    );
+}

@@ -1,11 +1,13 @@
 //! The decision evaluator: a Postgres-backed ontology view, per-organisation configuration, the
-//! generator registry and the orchestrator that turns generator output into recommendations.
+//! generator registry, the orchestrator and the service that drives it.
 
 pub mod builtin;
 pub mod config;
 pub mod evaluator;
 pub mod generators;
 pub mod registry;
+pub mod run;
+pub mod runner;
 pub mod view;
 
 pub use config::{ConfigError, load_config, parse_config};
@@ -14,4 +16,5 @@ pub use evaluator::{
 };
 pub use generators::deadline::DeadlineAtRisk;
 pub use registry::{Registry, RegistryError, Skipped};
+pub use runner::{DrainReport, Leader, Runner, RunnerConfig, RunnerError};
 pub use view::PgOntologyView;

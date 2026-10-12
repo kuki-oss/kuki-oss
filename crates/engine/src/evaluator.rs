@@ -31,6 +31,7 @@ use kuki_store::{
     session::{OrgSession, with_org_tx},
 };
 use kuki_types::{Action, Provenance, RecommendationStatus};
+use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use thiserror::Error;
@@ -80,13 +81,13 @@ impl Default for EvaluatorOptions {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Rejection {
     pub dedup_key: String,
     pub reason: String,
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
 pub struct GeneratorReport {
     pub generator_id: String,
     /// Shadow runs evaluate and validate but never write.
@@ -103,7 +104,7 @@ pub struct GeneratorReport {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RunReport {
     pub organisation_id: Uuid,
     pub as_of: DateTime<Utc>,
@@ -125,6 +126,18 @@ pub(crate) fn day_start(now: DateTime<Utc>) -> DateTime<Utc> {
             .and_hms_opt(0, 0, 0)
             .expect("midnight exists"),
     )
+}
+
+/// Whether a pending row's dedup key (`<org>/<decision_type>/<id>+<id>…`) names one of the scoped
+/// entities. A full scope covers everything.
+pub(crate) fn key_in_scope(prefix: &str, key: &str, scope: &ScopeSpec) -> bool {
+    match scope {
+        ScopeSpec::Entities(ids) => key.strip_prefix(prefix).is_some_and(|rest| {
+            rest.split('+')
+                .any(|seg| ids.iter().any(|id| id.to_string() == seg))
+        }),
+        _ => true,
+    }
 }
 
 /// Everything about a proposal that the generator could get wrong.
@@ -384,18 +397,18 @@ impl Evaluator {
                 .then_with(|| a.dedup_key.cmp(&b.dedup_key))
         });
 
-        // Only a full-scope run can conclude that something is no longer proposed.
-        let clear: Vec<Uuid> = if matches!(scope, ScopeSpec::All) {
-            pending
-                .iter()
-                .filter(|p| {
-                    p.generator_id.as_deref() == Some(g.id()) && !keep.contains(&p.dedup_key)
-                })
-                .map(|p| p.id)
-                .collect()
-        } else {
-            Vec::new()
-        };
+        // A run can only conclude that something is no longer proposed for what it covered:
+        // everything for a full scope, otherwise the rows whose dedup key names a scoped entity.
+        let key_prefix = format!("{org}/{name}/");
+        let clear: Vec<Uuid> = pending
+            .iter()
+            .filter(|p| {
+                p.generator_id.as_deref() == Some(g.id())
+                    && !keep.contains(&p.dedup_key)
+                    && key_in_scope(&key_prefix, &p.dedup_key, &scope)
+            })
+            .map(|p| p.id)
+            .collect();
 
         let pending_keys: HashSet<String> = pending.iter().map(|p| p.dedup_key.clone()).collect();
         let budget = i64::from(cfg.review_budget.per_org_unit_per_day);
@@ -584,5 +597,17 @@ mod tests {
             day_start(now),
             Utc.with_ymd_and_hms(2026, 10, 11, 0, 0, 0).unwrap()
         );
+    }
+
+    #[test]
+    fn scoped_keys_match_on_entity_ids() {
+        let a = Uuid::from_u128(1);
+        let prefix = "o/t.d/";
+        let some = ScopeSpec::Entities(vec![a]);
+        assert!(key_in_scope(prefix, &format!("o/t.d/{a}"), &some));
+        assert!(key_in_scope(prefix, &format!("o/t.d/{a}+other"), &some));
+        assert!(!key_in_scope(prefix, "o/t.d/other", &some));
+        assert!(!key_in_scope(prefix, &format!("elsewhere/{a}"), &some));
+        assert!(key_in_scope(prefix, "o/t.d/other", &ScopeSpec::All));
     }
 }
