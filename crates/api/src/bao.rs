@@ -18,8 +18,15 @@ pub struct BaoClient {
     token: Secret,
 }
 
+fn ensure_crypto_provider() {
+    // Err means a provider is already installed (another client, another
+    // test thread). That is fine, so the result is deliberately ignored.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 impl BaoClient {
     pub fn new(addr: String, token: Secret) -> Result<Self, reqwest::Error> {
+        ensure_crypto_provider();
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(2))
             .timeout(Duration::from_secs(5))

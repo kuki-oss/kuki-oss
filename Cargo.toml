@@ -20,6 +20,7 @@ publish = false
 [workspace.dependencies]
 futures = "0.3"
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 uuid = { version = "1", features = ["v7", "v4", "v5", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 hex = "0.4"
@@ -46,7 +47,7 @@ tower-http = { version = "0.7.1", features = ["sensitive-headers"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "ansi"] }
 subtle = "2"
-reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"]}
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls-no-provider"]}
 base64 = "0.22"
 jsonschema = { version = "0.58", default-features = false }
 serde_path_to_error = "0.1"
