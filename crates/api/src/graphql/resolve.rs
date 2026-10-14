@@ -337,9 +337,10 @@ async fn resolve(
 
     // 3. Compare-and-set, then the state machine.
     if let Some(v) = if_version
-        && v != row.version {
-            return Err(stale(row.version));
-        }
+        && v != row.version
+    {
+        return Err(stale(row.version));
+    }
     if !status.can_transition_to(target) {
         return Err(invalid(status, target));
     }
@@ -427,7 +428,10 @@ async fn resolve(
                 .await?;
             }
             let row = store::get(c, org, id).await?;
-            Ok(Outcome::Done { row: Box::new(row), changed })
+            Ok(Outcome::Done {
+                row: Box::new(row),
+                changed,
+            })
         }
         .boxed()
     })
