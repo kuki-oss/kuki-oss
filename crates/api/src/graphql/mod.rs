@@ -10,10 +10,12 @@ mod problems;
 mod query;
 mod recommendations;
 mod registry;
+mod resolve;
+pub use resolve::MutationRoot;
 
 use std::sync::OnceLock;
 
-use async_graphql::{EmptyMutation, EmptySubscription, Request, Response, Schema};
+use async_graphql::{EmptySubscription, Request, Response, Schema};
 use axum::Json;
 use axum::extract::State;
 use axum::extract::rejection::JsonRejection;
@@ -24,7 +26,7 @@ use crate::state::AppState;
 
 pub use query::QueryRoot;
 
-pub type AppSchema = Schema<QueryRoot, EmptyMutation, EmptySubscription>;
+pub type AppSchema = Schema<QueryRoot, MutationRoot, EmptySubscription>;
 
 /// Query limits. Placeholders until connection fields exist; page-size aware
 /// complexity comes with `orgUnits`.
@@ -42,7 +44,7 @@ impl Limits {
 }
 
 pub fn build(limits: Limits) -> AppSchema {
-    Schema::build(QueryRoot::default(), EmptyMutation, EmptySubscription)
+    Schema::build(QueryRoot::default(), MutationRoot, EmptySubscription)
         .limit_depth(limits.depth)
         .limit_complexity(limits.complexity)
         // Not referenced by any field; registered so SDKs see them (contract).
@@ -65,7 +67,10 @@ pub async fn post_graphql(
 ) -> Result<Json<Response>, ApiError> {
     let Json(req) =
         body.map_err(|_| ApiError::validation("body is not a valid GraphQL request"))?;
-    let req = req.data(principal).data(st.pool.clone());
+    let req = req
+        .data(principal)
+        .data(st.pool.clone())
+        .data(st.extensions.clone());
     let resp = schema().execute(req).await;
     Ok(Json(problems::normalise(resp)))
 }

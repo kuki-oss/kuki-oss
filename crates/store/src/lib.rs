@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod audit;
 pub mod backfill;
 pub mod catalog;
 pub mod dirty;

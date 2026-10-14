@@ -62,6 +62,7 @@ pub async fn build_state(config: ApiConfig) -> Result<AppState, ServeError> {
         keys: Arc::new(PgKeyStore(pool)),
         hasher,
         ready: Arc::new(AllReady(checks)),
+        extensions: Arc::new(kuki_extension::Extensions::default()),
     })
 }
 

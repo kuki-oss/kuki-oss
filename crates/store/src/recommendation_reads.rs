@@ -232,3 +232,18 @@ pub async fn executions_for(
     .fetch_all(c)
     .await
 }
+
+/// The registered payload schema for a decision type, if the organisation has one.
+pub async fn payload_schema(
+    c: &mut PgConnection,
+    org: Uuid,
+    decision_type: &str,
+) -> Result<Option<serde_json::Value>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT payload_schema FROM decision_types WHERE organisation_id = $1 AND name = $2",
+    )
+    .bind(org)
+    .bind(decision_type)
+    .fetch_optional(c)
+    .await
+}

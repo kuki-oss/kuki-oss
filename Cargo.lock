@@ -1432,6 +1432,8 @@ dependencies = [
  "hex",
  "hmac",
  "http-body-util",
+ "jsonschema",
+ "kuki-extension",
  "kuki-ingest",
  "kuki-store",
  "kuki-types",

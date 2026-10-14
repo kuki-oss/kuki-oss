@@ -245,9 +245,17 @@ mod tests {
 
     #[tokio::test]
     async fn unreachable_backend_is_503() {
+        // A server that accepts and immediately hangs up: always a transport error,
+        // with no freed-port race against sibling tests.
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = format!("http://{}", l.local_addr().unwrap());
-        drop(l); // nothing listens here now
+        tokio::spawn(async move {
+            loop {
+                if let Ok((s, _)) = l.accept().await {
+                    drop(s);
+                }
+            }
+        });
         let h = BaoHasher {
             client: client(addr, TOKEN),
             key_name: "kuki-api-keys".into(),

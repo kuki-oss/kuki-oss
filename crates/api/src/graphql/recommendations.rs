@@ -455,7 +455,7 @@ pub struct KukiRecommendation {
 }
 
 impl KukiRecommendation {
-    fn new(row: RecommendationRow) -> Result<Self> {
+    pub(super) fn new(row: RecommendationRow) -> Result<Self> {
         let status: kt::RecommendationStatus = stored(&row.status)?;
         let action: kt::Action = part(&row.body, "action")?;
         let rationale: kt::Rationale = part(&row.body, "rationale")?;

@@ -62,6 +62,7 @@ pub fn app(pool: PgPool) -> axum::Router {
         keys: Arc::new(PgKeyStore(pool.clone())),
         hasher: Arc::new(TestHasher),
         ready: Arc::new(PgReadiness(pool)),
+        extensions: Arc::new(kuki_extension::Extensions::default()),
     })
 }
 

@@ -88,6 +88,7 @@ mod tests {
             hasher: Arc::new(TestHasher::standard()),
             keys: Arc::new(keys),
             ready: Arc::new(Ready(ready)),
+            extensions: Arc::new(kuki_extension::Extensions::default()),
         })
     }
 

@@ -18,4 +18,5 @@ pub struct AppState {
     pub keys: Arc<dyn KeyStore>,
     pub hasher: Arc<dyn KeyHasher>,
     pub ready: Arc<dyn Readiness>,
+    pub extensions: Arc<kuki_extension::Extensions>,
 }
