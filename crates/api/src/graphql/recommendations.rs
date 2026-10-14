@@ -430,7 +430,7 @@ fn part<T: serde::de::DeserializeOwned>(v: &JsonValue, key: &str) -> Result<T> {
 }
 
 impl ActionExecution {
-    fn from_row(r: reads::ExecutionRow) -> Result<Self> {
+    pub(super) fn from_row(r: reads::ExecutionRow) -> Result<Self> {
         Ok(ActionExecution {
             id: ID(r.id.to_string()),
             action_type: r.action_type,

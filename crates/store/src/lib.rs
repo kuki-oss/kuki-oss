@@ -4,6 +4,7 @@ pub mod backfill;
 pub mod catalog;
 pub mod dirty;
 pub mod engine_reads;
+pub mod executions;
 pub mod ingest;
 pub mod links;
 pub mod metrics;

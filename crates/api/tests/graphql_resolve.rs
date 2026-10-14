@@ -162,7 +162,10 @@ async fn accepting_records_the_resolution_announces_it_and_audits_it(admin: PgPo
     assert!(b["errors"].is_null(), "{b}");
     let r = &b["data"]["acceptRecommendation"];
     assert_eq!(r["clientMutationId"], "m-1");
-    assert!(r["actionExecution"].is_null(), "no executor yet");
+    assert!(
+        r["actionExecution"].is_null(),
+        "no action type, so nothing to execute"
+    );
     let rec = &r["recommendation"];
     assert_eq!(rec["id"], u(1));
     assert_eq!(rec["status"], "ACCEPTED");
@@ -460,4 +463,118 @@ async fn scope_tenancy_and_arguments(admin: PgPool) {
         assert_eq!(s, axum::http::StatusCode::OK);
         assert_eq!(b["errors"][0]["extensions"]["code"], "VALIDATION_FAILED", "{b}");
     }
+}
+
+async fn typed(admin: &PgPool, n: u128, proposed: bool) {
+    sqlx::query(
+        "UPDATE recommendations
+            SET body = jsonb_set(jsonb_set(body, '{action,action_type}', '\"work.escalate.notify\"'),
+                                 '{action,proposed}', to_jsonb($2::bool))
+          WHERE id = $1",
+    )
+    .bind(Uuid::from_u128(n))
+    .bind(proposed)
+    .execute(admin)
+    .await
+    .unwrap();
+}
+
+fn accept_full(id: u128, extra: &str) -> String {
+    format!(
+        r#"mutation {{ acceptRecommendation(input: {{ recommendationId: "{}", clientMutationId: "m-1"{extra} }}) {{
+            actionExecution {{ id actionType status adapter attempts createdBy finishedAt result }}
+            recommendation {{ status version }} }} }}"#,
+        u(id)
+    )
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn accepting_queues_the_approved_action_in_the_same_transaction(admin: PgPool) {
+    let env = setup(&admin).await;
+    put(&admin, env.org, 1, None, "pending", None).await;
+    typed(&admin, 1, true).await;
+    let me = principal(&env).await;
+
+    let q = accept_full(1, r#", payloadOverride: { object_id: "o-2" }"#);
+    let (_, b) = gql(&env.app, &env.tok, &q).await;
+    assert!(b["errors"].is_null(), "{b}");
+    let x = &b["data"]["acceptRecommendation"]["actionExecution"];
+    assert_eq!(x["actionType"], "work.escalate.notify");
+    assert_eq!(x["status"], "QUEUED");
+    assert_eq!(x["adapter"], "unrouted");
+    assert_eq!(x["attempts"], 0);
+    assert_eq!(x["createdBy"], me.as_str());
+    assert!(x["finishedAt"].is_null() && x["result"].is_null());
+    assert_eq!(
+        b["data"]["acceptRecommendation"]["recommendation"]["status"],
+        "ACCEPTED"
+    );
+
+    // The row carries what the operator approved: the override, not the original.
+    let (key, input): (String, Value) =
+        sqlx::query_as("SELECT idempotency_key, input FROM action_executions")
+            .fetch_one(&admin)
+            .await
+            .unwrap();
+    assert_eq!(key, format!("recommendation:{}:accept", u(1)));
+    assert_eq!(input["payload"], json!({ "object_id": "o-2" }));
+    assert_eq!(input["overridden"], true);
+    assert_eq!(input["recommendationId"], u(1));
+    assert_eq!(input["actionType"], "work.escalate.notify");
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn a_retried_accept_returns_the_same_execution_and_queues_nothing_more(admin: PgPool) {
+    let env = setup(&admin).await;
+    put(&admin, env.org, 1, None, "pending", None).await;
+    typed(&admin, 1, true).await;
+
+    let (_, first) = gql(&env.app, &env.tok, &accept_full(1, "")).await;
+    let (_, again) = gql(&env.app, &env.tok, &accept_full(1, "")).await;
+    assert!(
+        first["errors"].is_null() && again["errors"].is_null(),
+        "{first} {again}"
+    );
+    let id = &first["data"]["acceptRecommendation"]["actionExecution"]["id"];
+    assert!(id.is_string());
+    assert_eq!(
+        &again["data"]["acceptRecommendation"]["actionExecution"]["id"],
+        id
+    );
+    assert_eq!(count(&admin, "action_executions").await, 1);
+
+    // The original payload is used when nothing was overridden.
+    let input: Value = sqlx::query_scalar("SELECT input FROM action_executions")
+        .fetch_one(&admin)
+        .await
+        .unwrap();
+    assert_eq!(input["payload"], json!({ "object_id": "o-1" }));
+    assert_eq!(input["overridden"], false);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn nothing_is_queued_for_rejections_advisory_actions_or_untyped_ones(admin: PgPool) {
+    let env = setup(&admin).await;
+    for n in 1..=3 {
+        put(&admin, env.org, n, None, "pending", None).await;
+    }
+    typed(&admin, 1, true).await; // rejected below
+    typed(&admin, 2, false).await; // typed but not proposed: advisory
+    // 3 has no action type at all
+
+    let (_, b) = gql(&env.app, &env.tok, &reject(1, "NOT_NOW", "")).await;
+    assert!(b["errors"].is_null(), "{b}");
+    for n in [2, 3] {
+        let (_, b) = gql(&env.app, &env.tok, &accept_full(n, "")).await;
+        assert!(b["errors"].is_null(), "{b}");
+        assert!(
+            b["data"]["acceptRecommendation"]["actionExecution"].is_null(),
+            "{n}: {b}"
+        );
+        assert_eq!(
+            b["data"]["acceptRecommendation"]["recommendation"]["status"],
+            "ACCEPTED"
+        );
+    }
+    assert_eq!(count(&admin, "action_executions").await, 0);
 }

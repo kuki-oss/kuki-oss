@@ -17,6 +17,7 @@ use chrono::Utc;
 use futures::FutureExt;
 use kuki_extension::{AuditEntry, Extensions, PolicyAction, PolicyDecision, PolicyRequest};
 use kuki_store::audit;
+use kuki_store::executions;
 use kuki_store::recommendation_reads as reads;
 use kuki_store::recommendations::{
     self as store, RecommendationRow, Transition, TransitionError, Transitioned,
@@ -254,12 +255,34 @@ fn domain(row: &RecommendationRow) -> Result<kt::Recommendation> {
 
 // ── the work ────────────────────────────────────────────────────────────────
 
+struct Done {
+    row: Option<RecommendationRow>,
+    changed: bool,
+    execution: Option<reads::ExecutionRow>,
+}
+
 enum Outcome {
-    Done {
-        row: Box<Option<RecommendationRow>>,
-        changed: bool,
-    },
+    Done(Box<Done>),
     Failed(TransitionError),
+}
+
+/// The oldest execution of a recommendation: a retried accept returns the one it queued.
+async fn first_execution(
+    pool: &PgPool,
+    p: &Principal,
+    id: Uuid,
+) -> Result<Option<reads::ExecutionRow>> {
+    let org = p.session.org_id;
+    let mut rows = kuki_store::session::with_org_tx(pool, &p.session, |c| {
+        async move { reads::executions_for(c, org, id).await }.boxed()
+    })
+    .await
+    .map_err(ApiError::internal)?;
+    Ok(if rows.is_empty() {
+        None
+    } else {
+        Some(rows.swap_remove(0))
+    })
 }
 
 async fn resolve(
@@ -268,7 +291,7 @@ async fn resolve(
     if_version: Option<i32>,
     client_mutation_id: &str,
     res: Resolution,
-) -> Result<RecommendationRow> {
+) -> Result<(RecommendationRow, Option<reads::ExecutionRow>)> {
     let p = ctx.data::<Principal>()?;
     let pool = ctx.data::<PgPool>()?;
     let ext = ctx.data::<Arc<Extensions>>()?;
@@ -326,7 +349,12 @@ async fn resolve(
     };
     if already {
         if row.resolved_by.as_deref() == Some(actor.as_str()) {
-            return Ok(row);
+            let execution = if accepting {
+                first_execution(pool, p, id).await?
+            } else {
+                None
+            };
+            return Ok((row, execution));
         }
         return Err(problem(
             "CONFLICT",
@@ -384,6 +412,28 @@ async fn resolve(
         Resolution::Reject { code, text } => reject_resolution(*code, text.as_deref()),
     };
 
+    // 5b. An accepted, proposed action with a type queues its execution with
+    // the decision. It carries the payload the operator actually approved:
+    // the override when it differs.
+    let queued: Option<(String, Value)> = if accepting && rec.action.proposed {
+        rec.action.action_type.clone().map(|action_type| {
+            let payload = resolution
+                .get("payload_override")
+                .unwrap_or(&rec.action.payload)
+                .clone();
+            let input = json!({
+                "recommendationId": id.to_string(),
+                "decisionType": row.decision_type,
+                "actionType": action_type,
+                "payload": payload,
+                "overridden": resolution["payload_overridden"],
+            });
+            (action_type, input)
+        })
+    } else {
+        None
+    };
+
     // 6. One transaction: the transition (with its outbox event), the audit row, the re-read.
     let now = Utc::now();
     let audit_id = Uuid::new_v4();
@@ -396,7 +446,12 @@ async fn resolve(
         "resolution": resolution,
     });
     let outcome = kuki_store::session::with_org_tx(pool, &p.session, |c| {
-        let (actor, resolution, details) = (actor.clone(), resolution.clone(), details.clone());
+        let (actor, resolution, details, queued) = (
+            actor.clone(),
+            resolution.clone(),
+            details.clone(),
+            queued.clone(),
+        );
         async move {
             let t = Transition {
                 id,
@@ -412,6 +467,7 @@ async fn resolve(
                 Err(TransitionError::Db(e)) => return Err(e),
                 Err(e) => return Ok(Outcome::Failed(e)),
             };
+            let mut execution = None;
             if changed {
                 audit::append(
                     c,
@@ -426,12 +482,29 @@ async fn resolve(
                     },
                 )
                 .await?;
+                if let Some((action_type, input)) = &queued {
+                    execution = executions::enqueue(
+                        c,
+                        org,
+                        &executions::NewExecution {
+                            id: Uuid::new_v4(),
+                            recommendation_id: id,
+                            action_type,
+                            input,
+                            idempotency_key: &format!("recommendation:{id}:accept"),
+                            created_by: &actor,
+                            now,
+                        },
+                    )
+                    .await?;
+                }
             }
             let row = store::get(c, org, id).await?;
-            Ok(Outcome::Done {
-                row: Box::new(row),
+            Ok(Outcome::Done(Box::new(Done {
+                row,
                 changed,
-            })
+                execution,
+            })))
         }
         .boxed()
     })
@@ -440,7 +513,12 @@ async fn resolve(
 
     match outcome {
         Outcome::Failed(e) => Err(map_failure(e)),
-        Outcome::Done { row, changed } => {
+        Outcome::Done(done) => {
+            let Done {
+                row,
+                changed,
+                execution,
+            } = *done;
             let row = row.ok_or_else(not_found)?;
             if changed {
                 // After commit, in commit order per organisation. A sink failure never undoes the
@@ -458,7 +536,7 @@ async fn resolve(
                     tracing::warn!(error = %e, audit_id = %audit_id, "audit sink failed after commit");
                 }
             }
-            Ok(row)
+            Ok((row, execution))
         }
     }
 }
@@ -485,11 +563,11 @@ impl MutationRoot {
             note: input.note,
             payload_override: input.payload_override.map(|j| j.0),
         };
-        let row = resolve(ctx, id, input.if_version, &input.client_mutation_id, res).await?;
+        let (row, execution) =
+            resolve(ctx, id, input.if_version, &input.client_mutation_id, res).await?;
         Ok(AcceptRecommendationPayload {
             recommendation: KukiRecommendation::new(row)?,
-            // No executor exists yet, so nothing creates action_executions rows.
-            action_execution: None,
+            action_execution: execution.map(ActionExecution::from_row).transpose()?,
             client_mutation_id: input.client_mutation_id,
         })
     }
@@ -509,7 +587,7 @@ impl MutationRoot {
             code: input.reason_code,
             text: input.reason_text,
         };
-        let row = resolve(ctx, id, input.if_version, &input.client_mutation_id, res).await?;
+        let (row, _) = resolve(ctx, id, input.if_version, &input.client_mutation_id, res).await?;
         Ok(RejectRecommendationPayload {
             recommendation: KukiRecommendation::new(row)?,
             client_mutation_id: input.client_mutation_id,
