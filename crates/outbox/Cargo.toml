@@ -19,3 +19,6 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tracing.workspace = true
 uuid.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+hex.workspace = true

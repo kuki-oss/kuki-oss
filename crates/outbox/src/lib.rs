@@ -5,6 +5,7 @@ mod kafka;
 mod publisher;
 mod relay;
 mod run;
+mod signing;
 
 pub use error::RelayError;
 pub use kafka::{KafkaConfig, KafkaPublisher, ensure_topics};
