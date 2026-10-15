@@ -241,16 +241,16 @@ async fn a_queued_execution_runs_and_completes_the_recommendation(admin: PgPool)
     );
     assert_eq!(announced(&admin, org).await, ["executing", "executed"]);
 
-    let seen = script.seen.lock().unwrap();
-    assert_eq!(seen.len(), 1);
-    assert_eq!(
-        (seen[0].id, seen[0].attempt, seen[0].action_type.as_str()),
-        (u(100), 1, TYPE)
-    );
-    assert_eq!(seen[0].created_by, "user:amina");
-    assert_eq!(seen[0].input["payload"], json!({ "object_id": "o-1" }));
-    drop(seen);
-
+    {
+        let seen = script.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(
+            (seen[0].id, seen[0].attempt, seen[0].action_type.as_str()),
+            (u(100), 1, TYPE)
+        );
+        assert_eq!(seen[0].created_by, "user:amina");
+        assert_eq!(seen[0].input["payload"], json!({ "object_id": "o-1" }));
+    }
     assert_eq!(x.tick().await.unwrap().claimed, 0, "nothing is left to do");
 }
 
