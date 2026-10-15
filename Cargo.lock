@@ -1420,6 +1420,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "kuki-actions"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "futures",
+ "kuki-store",
+ "kuki-types",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "kuki-api"
 version = "0.0.0"
 dependencies = [

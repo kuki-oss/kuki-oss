@@ -9,6 +9,7 @@ members = [
     "crates/ingest",
     "crates/outbox",
     "crates/engine",
+    "crates/actions",
 ]
 
 [workspace.package]
