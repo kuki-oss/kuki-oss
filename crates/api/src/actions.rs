@@ -13,7 +13,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use kuki_actions::{
-    CachedSecrets, Config as ExecutorConfig, Executor, RegistryRouter, SecretSource, WebhookConfig,
+    CachedSecrets, Config as ExecutorConfig, Executor, RegistryRouter, SecretSource, WebhookConfig, DeliveryConfig, DeliveryWorker,
     valid_reference,
 };
 use tokio::sync::watch;
@@ -109,9 +109,12 @@ pub async fn run_actions(api: ApiConfig) -> Result<(), ServeError> {
 
     let kv = BaoKv::new(bao, cfg.kv_mount.clone()).map_err(ServeError::Config)?;
     let secrets: Arc<dyn SecretSource> = Arc::new(CachedSecrets::new(kv, cfg.secret_ttl));
-    let router = RegistryRouter::new(pool.clone(), secrets, &cfg.webhook).map_err(ServeError::Config)?;
-    let executor =
-        Executor::new(pool, Arc::new(router), ExecutorConfig::default()).map_err(ServeError::Config)?;
+    let router =
+        RegistryRouter::new(pool.clone(), secrets.clone(), &cfg.webhook).map_err(ServeError::Config)?;
+    let executor = Executor::new(pool.clone(), Arc::new(router), ExecutorConfig::default())
+        .map_err(ServeError::Config)?;
+    let deliveries = DeliveryWorker::new(pool, secrets, &cfg.webhook, DeliveryConfig::default())
+        .map_err(ServeError::Config)?;
 
     if cfg.webhook.allow_insecure_http {
         tracing::warn!("http:// webhook endpoints are allowed (KUKI_WEBHOOK_ALLOW_HTTP=true)");
@@ -120,7 +123,7 @@ pub async fn run_actions(api: ApiConfig) -> Result<(), ServeError> {
         kv_mount = %cfg.kv_mount,
         secret_ttl_secs = cfg.secret_ttl.as_secs(),
         webhook_timeout_secs = cfg.webhook.timeout.as_secs(),
-        "kuki action executor running"
+        "kuki action executor and event delivery running"
     );
 
     let (stop, stopped) = watch::channel(false);
@@ -128,7 +131,7 @@ pub async fn run_actions(api: ApiConfig) -> Result<(), ServeError> {
         shutdown_signal().await;
         let _ = stop.send(true);
     });
-    executor.run(stopped).await;
+    tokio::join!(executor.run(stopped.clone()), deliveries.run(stopped));
     Ok(())
 }
 

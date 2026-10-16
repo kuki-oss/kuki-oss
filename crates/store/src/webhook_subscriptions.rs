@@ -6,6 +6,11 @@ use sqlx::PgConnection;
 use uuid::Uuid;
 
 pub const STATUS_CHANGED: &str = "recommendation.status_changed";
+pub const EVENT_TYPES: [&str; 3] = [
+    "recommendation.created",
+    "recommendation.updated",
+    STATUS_CHANGED,
+];
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Subscription {
