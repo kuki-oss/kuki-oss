@@ -1423,10 +1423,14 @@ dependencies = [
 name = "kuki-actions"
 version = "0.0.0"
 dependencies = [
+ "axum",
  "chrono",
  "futures",
+ "kuki-outbox",
  "kuki-store",
  "kuki-types",
+ "reqwest",
+ "rustls",
  "serde_json",
  "sqlx",
  "tokio",

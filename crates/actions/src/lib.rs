@@ -7,8 +7,12 @@
 
 mod adapter;
 mod executor;
+mod registry;
+mod webhook;
 pub mod secrets;
 
 pub use adapter::{Adapter, Job, Outcome, Router, StaticRouter};
 pub use executor::{ACTOR, Config, Executor, Report};
 pub use secrets::{CachedSecrets, SecretBytes, SecretError, SecretSource, StaticSecrets, valid_reference};
+pub use registry::RegistryRouter;
+pub use webhook::{Delivery, WebhookAdapter, WebhookConfig, client as webhook_client};
