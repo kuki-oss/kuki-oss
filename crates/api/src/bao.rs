@@ -4,6 +4,9 @@ use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use reqwest::header::HeaderValue;
 use serde_json::{Value, json};
+use futures::{FutureExt, future::BoxFuture};
+
+use kuki_actions::secrets::{SecretBytes, SecretError, SecretSource, valid_reference};
 
 use crate::auth::KeyHasher;
 use crate::config::Secret;
@@ -73,6 +76,30 @@ impl BaoClient {
             .header("X-Vault-Token", self.token_header()?);
         self.finish(req, path).await
     }
+
+    /// Read the fields of a KV v2 secret at `<mount>/data/<path>`.
+    /// `Ok(None)` means the secret does not exist (or is soft-deleted).
+    pub async fn kv_read(&self, mount: &str, path: &str) -> Result<Option<Value>, ApiError> {
+        let res = self
+            .http
+            .get(format!("{}/v1/{mount}/data/{path}", self.addr))
+            .header("X-Vault-Token", self.token_header()?)
+            .send()
+            .await
+            .map_err(|e| {
+                tracing::warn!(error = %e, mount, path, "openbao request failed");
+                ApiError::unavailable(UNAVAILABLE)
+            })?;
+        if res.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !res.status().is_success() {
+            tracing::warn!(status = %res.status(), mount, path, "openbao returned an error");
+            return Err(ApiError::unavailable(UNAVAILABLE));
+        }
+        let v: Value = res.json().await.map_err(ApiError::internal)?;
+        Ok(Some(v["data"]["data"].clone()))
+    }
 }
 
 pub struct BaoHasher {
@@ -124,6 +151,49 @@ impl Readiness for BaoReadiness {
     }
 }
 
+/// The field of a KV v2 secret that holds a webhook signing secret.
+pub const SIGNING_SECRET_FIELD: &str = "secret";
+
+/// Webhook signing secrets from OpenBao KV v2. A `secret_ref` of
+/// `kuki/webhooks/acme/draft_po` is read from `<mount>/data/kuki/webhooks/acme/draft_po`.
+pub struct BaoKv {
+    client: Arc<BaoClient>,
+    mount: String,
+}
+
+impl BaoKv {
+    pub fn new(client: Arc<BaoClient>, mount: impl Into<String>) -> Result<Self, String> {
+        let mount = mount.into();
+        if !valid_reference(&mount) {
+            return Err(format!("invalid KV mount {mount:?}"));
+        }
+        Ok(Self { client, mount })
+    }
+}
+
+impl SecretSource for BaoKv {
+    fn read<'a>(&'a self, reference: &'a str) -> BoxFuture<'a, Result<SecretBytes, SecretError>> {
+        async move {
+            // Defence in depth: the database already enforces this shape, and the
+            // reference is spliced into a URL path, so never trust it blindly.
+            if !valid_reference(reference) {
+                return Err(SecretError::Missing("malformed secret reference".into()));
+            }
+            let fields = self
+                .client
+                .kv_read(&self.mount, reference)
+                .await
+                .map_err(|_| SecretError::Unavailable)?
+                .ok_or_else(|| SecretError::Missing(format!("no secret at {reference}")))?;
+            let value = fields[SIGNING_SECRET_FIELD].as_str().filter(|s| !s.is_empty()).ok_or_else(
+                || SecretError::Missing(format!("{reference} has no `{SIGNING_SECRET_FIELD}` field")),
+            )?;
+            Ok(SecretBytes::new(value.as_bytes().to_vec()))
+        }
+        .boxed()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use axum::extract::Path;
@@ -133,6 +203,8 @@ mod tests {
     use axum::{Json, Router};
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use axum::extract::State;
 
     use super::*;
 
@@ -292,5 +364,94 @@ mod tests {
     async fn readiness_rejects_an_invalid_token() {
         let addr = spawn(mock(StatusCode::OK)).await;
         assert!(BaoReadiness(client(addr, "wrong")).check().await.is_err());
+    }
+
+    async fn kv(
+        State(hits): State<Arc<AtomicUsize>>,
+        Path((mount, path)): Path<(String, String)>,
+        headers: HeaderMap,
+    ) -> (StatusCode, Json<Value>) {
+        hits.fetch_add(1, Ordering::SeqCst);
+        if !token_ok(&headers) {
+            return (StatusCode::FORBIDDEN, Json(json!({ "errors": ["permission denied"] })));
+        }
+        let data = |d: Value| {
+            (StatusCode::OK, Json(json!({ "data": { "data": d, "metadata": { "version": 1 } } })))
+        };
+        match (mount.as_str(), path.as_str()) {
+            ("secret", "kuki/webhooks/acme/draft_po") => data(json!({ "secret": "s3cr3t" })),
+            ("secret", "kuki/webhooks/acme/no_field") => data(json!({ "other": "x" })),
+            ("secret", "kuki/webhooks/acme/not_a_string") => data(json!({ "secret": 5 })),
+            _ => (StatusCode::NOT_FOUND, Json(json!({ "errors": [] }))),
+        }
+    }
+
+    fn kv_mock(hits: Arc<AtomicUsize>) -> Router {
+        Router::new().route("/v1/{mount}/data/{*path}", get(kv)).with_state(hits)
+    }
+
+    async fn kv_source(token: &str) -> (BaoKv, Arc<AtomicUsize>) {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let addr = spawn(kv_mock(hits.clone())).await;
+        (BaoKv::new(client(addr, token), "secret").unwrap(), hits)
+    }
+
+    #[tokio::test]
+    async fn a_kv_v2_secret_is_read_from_the_mount_and_path() {
+        let (kv, _) = kv_source(TOKEN).await;
+        let s = kv.read("kuki/webhooks/acme/draft_po").await.unwrap();
+        assert_eq!(s.expose(), b"s3cr3t");
+    }
+
+    #[tokio::test]
+    async fn an_absent_secret_is_missing_not_unavailable() {
+        let (kv, _) = kv_source(TOKEN).await;
+        let e = kv.read("kuki/webhooks/acme/nothing_here").await.unwrap_err();
+        assert!(matches!(e, SecretError::Missing(_)), "{e:?}");
+    }
+
+    #[tokio::test]
+    async fn a_secret_without_a_usable_field_is_missing() {
+        let (kv, _) = kv_source(TOKEN).await;
+        for r in ["kuki/webhooks/acme/no_field", "kuki/webhooks/acme/not_a_string"] {
+            let e = kv.read(r).await.unwrap_err();
+            assert!(matches!(e, SecretError::Missing(_)), "{r}: {e:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refused_token_or_dead_backend_is_unavailable() {
+        let (kv, _) = kv_source("wrong").await;
+        assert_eq!(kv.read("kuki/webhooks/acme/draft_po").await.unwrap_err(), SecretError::Unavailable);
+
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = format!("http://{}", l.local_addr().unwrap());
+        tokio::spawn(async move {
+            loop {
+                if let Ok((s, _)) = l.accept().await {
+                    drop(s);
+                }
+            }
+        });
+        let dead = BaoKv::new(client(addr, TOKEN), "secret").unwrap();
+        assert_eq!(dead.read("kuki/webhooks/acme/draft_po").await.unwrap_err(), SecretError::Unavailable);
+    }
+
+    #[tokio::test]
+    async fn malformed_references_never_reach_the_backend() {
+        let (kv, hits) = kv_source(TOKEN).await;
+        for bad in ["", "../etc", "/abs", "a//b", "a b", "a/../b", "a?x=1", "a#b"] {
+            let e = kv.read(bad).await.unwrap_err();
+            assert!(matches!(e, SecretError::Missing(_)), "{bad:?}");
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn the_kv_mount_must_be_a_plain_path() {
+        let c = client("http://127.0.0.1:1".into(), TOKEN);
+        assert!(BaoKv::new(c.clone(), "secret").is_ok());
+        assert!(BaoKv::new(c.clone(), "").is_err());
+        assert!(BaoKv::new(c, "../sys").is_err());
     }
 }

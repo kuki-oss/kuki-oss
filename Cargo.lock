@@ -1448,6 +1448,7 @@ dependencies = [
  "hmac",
  "http-body-util",
  "jsonschema",
+ "kuki-actions",
  "kuki-extension",
  "kuki-ingest",
  "kuki-store",

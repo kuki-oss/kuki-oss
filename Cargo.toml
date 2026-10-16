@@ -37,6 +37,7 @@ kuki-ingest = { path = "crates/ingest" }
 kuki-outbox = { path = "crates/outbox" }
 kuki-extension = { path = "crates/extension" }
 kuki-engine = { path = "crates/engine" }
+kuki-actions = { path = "crates/actions" }
 semver = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net", "signal", "macros"] }
