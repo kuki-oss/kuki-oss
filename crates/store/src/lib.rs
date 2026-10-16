@@ -15,6 +15,7 @@ pub mod recommendation_reads;
 pub mod recommendations;
 pub mod session;
 pub mod tenant;
+pub mod webhook_endpoints;
 
 /// Migrations are embedded at compile time, used by `kuki serve` on boot and by tests
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
