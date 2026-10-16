@@ -2,6 +2,7 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::http::header;
 use sqlx::postgres::PgPoolOptions;
+use sqlx::PgPool;
 use thiserror::Error;
 use tower_http::sensitive_headers::SetSensitiveRequestHeadersLayer;
 
@@ -29,9 +30,10 @@ pub enum ServeError {
     Config(String),
 }
 
-pub async fn build_state(config: ApiConfig) -> Result<AppState, ServeError> {
-    let pool = PgPoolOptions::new()
-        .max_connections(10)
+/// A pool that connects as the application role (`kuki_app`, NOBYPASSRLS).
+pub async fn connect_app_pool(url: &str, max_connections: u32) -> Result<PgPool, sqlx::Error> {
+    PgPoolOptions::new()
+        .max_connections(max_connections)
         .acquire_timeout(Duration::from_secs(5))
         .after_connect(|conn, _meta| {
             Box::pin(async move {
@@ -39,8 +41,12 @@ pub async fn build_state(config: ApiConfig) -> Result<AppState, ServeError> {
                 Ok(())
             })
         })
-        .connect(config.database_url.expose_str())
-        .await?;
+        .connect(url)
+        .await
+}
+
+pub async fn build_state(config: ApiConfig) -> Result<AppState, ServeError> {
+    let pool = connect_app_pool(config.database_url.expose_str(), 10).await?;
 
     let bao = Arc::new(BaoClient::new(
         config.bao_addr.clone(),
@@ -98,7 +104,7 @@ pub async fn serve(config: ApiConfig) -> Result<(), ServeError> {
     Ok(())
 }
 
-async fn shutdown_signal() {
+pub(crate) async fn shutdown_signal() {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
     };

@@ -6,6 +6,7 @@ use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::EnvFilter;
 
 mod admin;
+mod webhooks;
 
 type Res = Result<(), Box<dyn Error>>;
 
@@ -39,6 +40,16 @@ enum Command {
         #[command(subcommand)]
         cmd: EvaluateCmd,
     },
+    /// Run the action evaluator, which delivers accepted actions to registered webhooks.
+    Actions {
+        #[command(subcommand)]
+        cmd: ActionsCmd,
+    },
+    /// Manage the webhook endpoint for each action type.
+    Webhooks {
+        #[command(subcommand)]
+        cmd: webhooks::WebhooksCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -59,6 +70,12 @@ enum EvaluateCmd {
     },
 }
 
+#[derive(Subcommand)]
+enum ActionsCmd {
+    /// Run the executor service
+    Run,
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     // Logs go to stderr: `kuki keys create` prints the key on stdout, and only that.
@@ -77,6 +94,8 @@ async fn main() -> ExitCode {
         Command::Keys { cmd } => admin::run_keys(cmd).await,
         Command::Outbox => run_outbox().await,
         Command::Evaluate { cmd } => run_evaluate(cmd).await,
+        Command::Actions { cmd } => run_actions(cmd).await,
+        Command::Webhooks { cmd } => webhooks::run(cmd).await,
     };
 
     match result {
@@ -96,6 +115,13 @@ async fn run_serve() -> Res {
 
 async fn run_outbox() -> Res {
     kuki_outbox::run_from_env().await?;
+    Ok(())
+}
+
+async fn run_actions(cmd: ActionsCmd) -> Res {
+    match cmd {
+        ActionsCmd::Run => kuki_api::run_actions(ApiConfig::from_env()?).await?,
+    }
     Ok(())
 }
 

@@ -17,6 +17,7 @@ pub mod ratelimit;
 pub mod routes;
 pub mod serve;
 pub mod state;
+mod actions;
 
 pub use auth::{KeyHasher, KeyRecord, KeyStore, Principal, Scope, authenticate};
 pub use config::{ApiConfig, ConfigError};
@@ -24,3 +25,5 @@ pub use error::ApiError;
 pub use routes::router;
 pub use serve::{ServeError, build_state, serve};
 pub use state::{AppState, Readiness};
+pub use actions::run_actions;
+pub use serve::connect_app_pool;

@@ -1478,6 +1478,8 @@ version = "0.0.0"
 dependencies = [
  "chrono",
  "clap",
+ "futures",
+ "kuki-actions",
  "kuki-api",
  "kuki-engine",
  "kuki-outbox",
@@ -1486,6 +1488,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

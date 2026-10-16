@@ -14,6 +14,9 @@ kuki-api.workspace = true
 kuki-store.workspace = true
 kuki-outbox.workspace = true
 kuki-engine.workspace = true
+kuki-actions.workspace = true
+futures.workspace = true
+uuid.workspace = true
 sqlx.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing.workspace = true
