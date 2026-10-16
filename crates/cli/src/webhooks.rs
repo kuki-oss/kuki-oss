@@ -88,6 +88,9 @@ pub enum WebhooksCmd {
         #[arg(long)]
         org: String,
     },
+    /// Run the Kafka consumer that queues recommendation events for subscribed
+    /// receivers (KUKI_DATABASE_URL, KUKI_KAFKA_BROKERS).
+    Fanout,
 }
 
 pub async fn run(cmd: WebhooksCmd) -> Res {
@@ -169,6 +172,7 @@ pub async fn run(cmd: WebhooksCmd) -> Res {
                 print_subscription(s);
             }
         }
+        WebhooksCmd::Fanout => kuki_outbox::run_fanout_from_env().await?,
     }
     Ok(())
 }

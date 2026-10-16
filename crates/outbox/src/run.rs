@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
 use kuki_store::outbox::KNOWN_TOPICS;
-use sqlx::postgres::PgPoolOptions;
+use sqlx::{PgPool, postgres::PgPoolOptions};
 
 use crate::error::RelayError;
 use crate::kafka::{KafkaConfig, KafkaPublisher, ensure_topics};
 use crate::relay::{Relay, RelayConfig};
+use crate::consume::{ConsumerConfig, FanoutConsumer};
 
 /// `NAME`, or the contents of the file named by `NAME_FILE` (Docker and Kubernetes secrets).
 fn secret(name: &str) -> Result<String, RelayError> {
@@ -34,12 +35,11 @@ async fn shutdown_signal() {
     tokio::select! { _ = ctrl_c => {}, _ = terminate => {} }
 }
 
-/// The `kuki outbox` role: connect as the application role, make sure the topics exist,
-/// relay until SIGINT or SIGTERM.
-pub async fn run_from_env() -> Result<(), RelayError> {
+/// A pool that connects as the application role.
+async fn app_pool(max_connections: u32) -> Result<PgPool, RelayError> {
     let url = secret("KUKI_DATABASE_URL")?;
-    let pool = PgPoolOptions::new()
-        .max_connections(3)
+    Ok(PgPoolOptions::new()
+        .max_connections(max_connections)
         .after_connect(|c, _| {
             Box::pin(async move {
                 sqlx::query("SET ROLE kuki_app").execute(&mut *c).await?;
@@ -47,7 +47,13 @@ pub async fn run_from_env() -> Result<(), RelayError> {
             })
         })
         .connect(&url)
-        .await?;
+        .await?)
+}
+
+/// The `kuki outbox` role: connect as the application role, make sure the topics exist,
+/// relay until SIGINT or SIGTERM.
+pub async fn run_from_env() -> Result<(), RelayError> {
+    let pool = app_pool(3).await?;
 
     let kafka = KafkaConfig::from_env()?;
     ensure_topics(&kafka, KNOWN_TOPICS).await?;
@@ -57,4 +63,23 @@ pub async fn run_from_env() -> Result<(), RelayError> {
     Relay::new(pool, Arc::new(publisher), RelayConfig::default())
         .run(shutdown_signal())
         .await
+}
+
+/// The `kuki webhooks fanout` role: consume recommendation events from kafka and queue them
+/// for subscribed receivers, until SIGINT or SIGTERM.
+pub async fn run_fanout_from_env() -> Result<(), RelayError> {
+    let pool = app_pool(3).await?;
+    let kafka = KafkaConfig::from_env()?;
+    let cfg = ConsumerConfig::from_env()?;
+    ensure_topics(&kafka, KNOWN_TOPICS).await?;
+    let consumer = FanoutConsumer::connect(&kafka, &cfg, pool)?;
+
+    tracing::info!(
+        brokers = %kafka.brokers,
+        group = %cfg.group_id,
+        topic = %cfg.topic,
+        from_start = cfg.from_start,
+        "recommendation event fan-out starting"
+    );
+    consumer.run(shutdown_signal()).await
 }

@@ -42,7 +42,7 @@ impl KafkaConfig {
     }
 }
 
-fn base(cfg: &KafkaConfig) -> ClientConfig {
+pub(crate) fn base(cfg: &KafkaConfig) -> ClientConfig {
     let mut c = ClientConfig::new();
     c.set("bootstrap.servers", &cfg.brokers)
         .set("client.id", &cfg.client_id);
