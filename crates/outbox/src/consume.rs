@@ -276,7 +276,7 @@ impl FanoutConsumer {
     }
 }
 
-fn header<'a>(m: &'a BorrowedMessage<'_>, name: &str) -> Option<&'a str> {
+pub(crate) fn header<'a>(m: &'a BorrowedMessage<'_>, name: &str) -> Option<&'a str> {
     let value = m.headers()?.iter().find(|h| h.key == name)?.value?;
     std::str::from_utf8(value).ok()
 }
