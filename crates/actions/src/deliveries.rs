@@ -5,8 +5,8 @@
 //! and POSTs it.
 //!
 //! Request: the event payload as JSON, with
-//!   Kuki-Signature: t=<unix>,v1=<hex>   (see kuki_outbox::signing; 300 s replay window)
-//!   Kuki-Event-Id: <outbox id>          stable across retries: dedupe on it
+//!   Kuki-Signature: t=`<unix>`,v1=`<hex>`   (see kuki_outbox::signing; 300 s replay window)
+//!   Kuki-Event-Id: `<outbox id>`          stable across retries: dedupe on it
 //!   Kuki-Event-Type, Kuki-Organisation-Id, Kuki-Attempt
 //! Retries can reorder events, so receivers order by the payload's `version`.
 //!

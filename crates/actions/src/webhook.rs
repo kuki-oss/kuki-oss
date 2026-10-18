@@ -3,10 +3,10 @@
 //! time.
 //!
 //! Request:
-//!   POST <endpoint>   Content-Type: application/json
-//!   Kuki-Signature: t=<unix>,v1=<hex>   (see kuki_outbox::signing; 300 s replay window)
-//!   Idempotency-Key: <execution id>     (identical on every retry: receivers must dedupe on it)
-//!   Kuki-Attempt: <n>
+//!   POST `<endpoint>`   Content-Type: application/json
+//!   Kuki-Signature: t=`<unix>`,v1=`<hex>`   (see kuki_outbox::signing; 300 s replay window)
+//!   Idempotency-Key: `<execution id>`     (identical on every retry: receivers must dedupe on it)
+//!   Kuki-Attempt: `<n>`
 //!   body: { type: "action.requested", executionId, organisationId, recommendationId,
 //!           actionType, attempt, createdBy, input }
 //!
