@@ -112,6 +112,21 @@ openapi-lint:
         paths: ["api/**/*", "redocly.yaml"]
         compare_to: refs/heads/master
 
+graphql-diff:
+  stage: lint
+  image: node:22
+  interruptible: true
+  script:
+    # Until there are releases, the base line is master. Switch to the latest tag later.
+    - git fetch --depth=1 origin master
+    - git show FETCH_HEAD:api/schema/kuki.graphql > "$CI_PROJECT_DIR/base.graphql"
+    - npx --yes @graphql-inspector/cli@5 diff base.graphql api/schema/kuki.graphql
+  rules:
+    # .gitlab-ci.yml is listed os this job runs on the merge request that introduces it.
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        paths: ["api/schema/kuki.graphql", ".gitlab-ci.yml"]
+
 schemathesis:
   stage: test
   image: docker:27

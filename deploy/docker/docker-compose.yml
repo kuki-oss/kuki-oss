@@ -1,5 +1,24 @@
 name: kuki
 
+# Shared by every long-running role (one image, one subcommand each).
+# `kuki` itself adds `build:` and does not use pull_policy so it builds the image the others reuse.
+x-kuki-app: &kuki-app
+  restart: unless-stopped
+  user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+  secrets: [database_url, bao_token]
+  depends_on:
+    kafka: { condition: service_healthy }
+    openbao: { condition: service_healthy }
+    migrate: { condition: service_completed_successfully }
+
+x-kuki-env: &kuki-env
+  KUKI_DATABASE_URL_FILE: /run/secrets/database_url
+  KUKI_BAO_ADDR: http://openbao:8200
+  KUKI_BAO_TOKEN_FILE: /run/secrets/bao_token
+  KUKI_KEY_ENV: ${KUKI_KEY_ENV:-live}
+  KUKI_KAFKA_BROKERS: kafka:19092
+  RUST_LOG: ${RUST_LOG:-info}
+
 services:
   postgres:
     image: postgres:18
@@ -24,7 +43,7 @@ services:
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: INTERNAL://:19092,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:19092,EXTERNAL://0.0.0.0:9092,CONTROLLER://kafka:9093
       KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092,EXTERNAL://localhost:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
@@ -41,7 +60,7 @@ services:
       retries: 20
 
   # DEV ONLY: dev mode is in-memory and auto-unsealed. Restarting it loses the
-  # Transit key, which invalidates every API key. Production needs real storage.
+  # Transit key, which invalidates every API key. Use real storage in production use-cases.
   openbao:
     image: ${OPENBAO_IMAGE:-openbao/openbao:latest}
     restart: unless-stopped
@@ -72,7 +91,8 @@ services:
       postgres: { condition: service_healthy }
     restart: "no"
 
-  # Operator CLI (`kuki keys ...`, `kuki orgs ...`). Not started by `up`; run it with
+  # Operator CLI (`kuki keys ...`, `kuki orgs ...`, `kuki webhooks ...`).
+  # Not started by `up`; run this with
   #   docker compose run --rm -T admin keys list
   admin:
     image: kuki-oss:dev
@@ -91,40 +111,56 @@ services:
       openbao: { condition: service_healthy }
     restart: "no"
 
+  # The Kuki API: GraphQL, REST ingest, live subscriptions (needs Kafka for those).
   kuki:
+    <<: *kuki-app
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
     image: kuki-oss:dev
-    restart: unless-stopped
     command: ["serve"]
-    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     environment:
+      <<: *kuki-env
       KUKI_BIND: 0.0.0.0:8080
-      KUKI_DATABASE_URL_FILE: /run/secrets/database_url
-      KUKI_BAO_ADDR: http://openbao:8200
-      KUKI_BAO_TOKEN_FILE: /run/secrets/bao_token
-      KUKI_KEY_ENV: ${KUKI_KEY_ENV:-live}
       KUKI_RATE_LIMIT_BURST: ${KUKI_RATE_LIMIT_BURST:-200}
       KUKI_RATE_LIMIT_REFILL_PER_SECOND: ${KUKI_RATE_LIMIT_REFILL_PER_SECOND:-100}
-      RUST_LOG: ${RUST_LOG:-info}
-    secrets: [database_url, bao_token]
     ports:
       - "127.0.0.1:${KUKI_PORT:-8080}:8080"
-    depends_on:
-      postgres: { condition: service_healthy }
-      openbao: { condition: service_healthy }
-      migrate: { condition: service_completed_successfully }
 
+  # Relays the Postgres-backed outbox into Kafka (this is leader-elected, extra replicas are safe).
   outbox:
+    <<: *kuki-app
     image: kuki-oss:dev
+    pull_policy: never
     command: ["outbox"]
-    depends_on:
-      kafka: { condition: service_healthy }
-      migrate: { condition: service_completed_successfully }
+    environment: *kuki-env
+
+  # Re-evaluates the generators when the ontology changes.
+  evaluate:
+    <<: *kuki-app
+    image: kuki-oss:dev
+    pull_policy: never
+    command: ["evaluate", "run"]
+    environment: *kuki-env
+
+  # Executes approved actions and delivers queued webhook events.
+  actions:
+    <<: *kuki-app
+    image: kuki-oss:dev
+    pull_policy: never
+    command: ["actions", "run"]
     environment:
-      KUKI_KAFKA_BROKERS: kafka:19092
-      KUKI_DATABASE_URL: ${KUKI_DATABASE_URL}
+      <<: *kuki-env
+      # Dev receivers are plain http. Keep this off in production use-cases.
+      KUKI_WEBHOOK_ALLOW_HTTP: ${KUKI_WEBHOOK_ALLOW_HTTP:-false}
+
+  # Consumes recommendation events from Kafka and queues them for webhook subscribers.
+  webhooks-fanout:
+    <<: *kuki-app
+    image: kuki-oss:dev
+    pull_policy: never
+    command: ["webhooks", "fanout"]
+    environment: *kuki-env
 
 secrets:
   pg_password: { file: ./secrets/pg_password }

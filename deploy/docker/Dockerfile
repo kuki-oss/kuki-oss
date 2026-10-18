@@ -2,6 +2,11 @@ FROM rust:1-bookworm AS build
 RUN apt-get update && apt-get install -y --no-install-recommends cmake \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
+
+# Install the pinned toolchain in its own layer, so it's cached after the first success
+COPY rust-toolchain.toml ./
+RUN rustup toolchain install --profile minimal
+
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
