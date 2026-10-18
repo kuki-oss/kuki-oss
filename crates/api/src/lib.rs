@@ -1,5 +1,6 @@
 //! kuki-api: HTTP access. Config, one error type, API-key authentication, and the
 //! routes to prove them (`/v1/health/*`, `/v1/graphql`). REST ingest mounts on this too.
+mod actions;
 pub mod admin;
 pub mod auth;
 pub mod backfills;
@@ -17,13 +18,12 @@ pub mod ratelimit;
 pub mod routes;
 pub mod serve;
 pub mod state;
-mod actions;
 
+pub use actions::run_actions;
 pub use auth::{KeyHasher, KeyRecord, KeyStore, Principal, Scope, authenticate};
 pub use config::{ApiConfig, ConfigError};
 pub use error::ApiError;
 pub use routes::router;
+pub use serve::connect_app_pool;
 pub use serve::{ServeError, build_state, serve};
 pub use state::{AppState, Readiness};
-pub use actions::run_actions;
-pub use serve::connect_app_pool;

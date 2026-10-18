@@ -92,7 +92,13 @@ impl WebhookAdapter {
         secrets: Arc<dyn SecretSource>,
         allow_insecure: bool,
     ) -> Self {
-        Self { http, url, secret_ref, secrets, allow_insecure }
+        Self {
+            http,
+            url,
+            secret_ref,
+            secrets,
+            allow_insecure,
+        }
     }
 
     pub async fn deliver(&self, d: &Delivery) -> Outcome {
@@ -106,7 +112,10 @@ impl WebhookAdapter {
         post_signed(
             &target,
             &d.body,
-            &[("Idempotency-Key", d.id.to_string()), ("Kuki-Attempt", d.attempt.to_string())],
+            &[
+                ("Idempotency-Key", d.id.to_string()),
+                ("Kuki-Attempt", d.attempt.to_string()),
+            ],
         )
         .await
     }
@@ -130,7 +139,14 @@ impl Adapter for WebhookAdapter {
                 json!(job.created_by),
             );
             match serde_json::to_vec(&body) {
-                Ok(body) => self.deliver(&Delivery { id: job.id, attempt, body }).await,
+                Ok(body) => {
+                    self.deliver(&Delivery {
+                        id: job.id,
+                        attempt,
+                        body,
+                    })
+                    .await
+                }
                 Err(e) => Outcome::Failed(format!("cannot encode request: {e}")),
             }
         }
@@ -278,7 +294,11 @@ fn parse(body: &[u8]) -> Value {
 fn detail(body: &[u8]) -> String {
     let text = String::from_utf8_lossy(body);
     let text: String = text.trim().chars().take(MAX_DETAIL_CHARS).collect();
-    if text.is_empty() { String::new() } else { format!(": {text}") }
+    if text.is_empty() {
+        String::new()
+    } else {
+        format!(": {text}")
+    }
 }
 
 #[cfg(test)]
@@ -310,7 +330,15 @@ mod tests {
     #[test]
     fn the_envelope_has_the_documented_fields() {
         let (id, org, rec) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3));
-        let v = envelope(id, org, rec, "draft_po", 2, &json!({ "a": 1 }), json!("alice"));
+        let v = envelope(
+            id,
+            org,
+            rec,
+            "draft_po",
+            2,
+            &json!({ "a": 1 }),
+            json!("alice"),
+        );
         assert_eq!(v["type"], "action.requested");
         assert_eq!(v["executionId"], id.to_string());
         assert_eq!(v["organisationId"], org.to_string());

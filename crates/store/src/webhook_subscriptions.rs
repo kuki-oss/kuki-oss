@@ -84,10 +84,11 @@ pub async fn matching(
 
 /// Returns whether a subscription was removed. Its queued deliveries go with it.
 pub async fn remove(c: &mut PgConnection, org: Uuid, name: &str) -> Result<bool, sqlx::Error> {
-    let r = sqlx::query("DELETE FROM webhook_subscriptions WHERE organisation_id = $1 AND name = $2")
-        .bind(org)
-        .bind(name)
-        .execute(c)
-        .await?;
+    let r =
+        sqlx::query("DELETE FROM webhook_subscriptions WHERE organisation_id = $1 AND name = $2")
+            .bind(org)
+            .bind(name)
+            .execute(c)
+            .await?;
     Ok(r.rows_affected() > 0)
 }

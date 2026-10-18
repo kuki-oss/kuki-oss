@@ -55,7 +55,9 @@ impl ConsumerConfig {
         let mut c = Self::default();
         if let Ok(group) = std::env::var("KUKI_WEBHOOKS_GROUP") {
             if group.trim().is_empty() {
-                return Err(RelayError::Config("KUKI_WEBHOOKS_GROUP must not be empty".into()));
+                return Err(RelayError::Config(
+                    "KUKI_WEBHOOKS_GROUP must not be empty".into(),
+                ));
             }
             c.group_id = group;
         }
@@ -133,7 +135,12 @@ pub fn parse(m: &Incoming<'_>) -> Result<Parsed, Skip> {
     if !EVENT_TYPES.contains(&event_type.as_str()) {
         return Err(Skip::UnknownEventType(event_type));
     }
-    Ok(Parsed { organisation_id, event_id: event_id.to_owned(), event_type, payload })
+    Ok(Parsed {
+        organisation_id,
+        event_id: event_id.to_owned(),
+        event_type,
+        payload,
+    })
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -146,7 +153,9 @@ pub enum Handled {
 fn is_poison(e: &sqlx::Error) -> bool {
     match e {
         // Integrity (23) and data (22) errors: the same row will fail the same way every time.
-        sqlx::Error::Database(d) => d.code().is_some_and(|c| c.starts_with("22") || c.starts_with("23")),
+        sqlx::Error::Database(d) => d
+            .code()
+            .is_some_and(|c| c.starts_with("22") || c.starts_with("23")),
         _ => false,
     }
 }
@@ -170,11 +179,20 @@ impl Fanout {
             Err(skip) => return Ok(Handled::Skipped(skip)),
         };
         let org = p.organisation_id;
-        let session = OrgSession { org_id: org, scope_path: None };
+        let session = OrgSession {
+            org_id: org,
+            scope_path: None,
+        };
         let queued = with_org_tx::<_, sqlx::Error, _>(&self.pool, &session, move |c| {
             async move {
-                webhook_deliveries::enqueue_for_event(c, org, &p.event_id, &p.event_type, &p.payload)
-                    .await
+                webhook_deliveries::enqueue_for_event(
+                    c,
+                    org,
+                    &p.event_id,
+                    &p.event_type,
+                    &p.payload,
+                )
+                .await
             }
             .boxed()
         })
@@ -193,20 +211,30 @@ pub struct FanoutConsumer {
 }
 
 impl FanoutConsumer {
-    pub fn connect(kafka: &KafkaConfig, cfg: &ConsumerConfig, pool: PgPool) -> Result<Self, RelayError> {
+    pub fn connect(
+        kafka: &KafkaConfig,
+        cfg: &ConsumerConfig,
+        pool: PgPool,
+    ) -> Result<Self, RelayError> {
         let consumer: StreamConsumer = base(kafka)
             .set("group.id", &cfg.group_id)
             .set("enable.auto.commit", "true")
             .set("auto.commit.interval.ms", "1000")
             // Offsets are stored only after a message is handled (see `run`).
             .set("enable.auto.offset.store", "false")
-            .set("auto.offset.reset", if cfg.from_start { "earliest" } else { "latest" })
+            .set(
+                "auto.offset.reset",
+                if cfg.from_start { "earliest" } else { "latest" },
+            )
             .create()
             .map_err(|e| RelayError::Kafka(e.to_string()))?;
         consumer
             .subscribe(&[cfg.topic.as_str()])
             .map_err(|e| RelayError::Kafka(e.to_string()))?;
-        Ok(Self { consumer, fanout: Fanout::new(pool) })
+        Ok(Self {
+            consumer,
+            fanout: Fanout::new(pool),
+        })
     }
 
     /// Consumes until `shutdown` completes.
@@ -239,7 +267,11 @@ impl FanoutConsumer {
                 match self.fanout.handle(&incoming).await {
                     Ok(Handled::Queued(n)) => {
                         if n > 0 {
-                            tracing::info!(event = incoming.outbox_id.unwrap_or(""), deliveries = n, "queued an event");
+                            tracing::info!(
+                                event = incoming.outbox_id.unwrap_or(""),
+                                deliveries = n,
+                                "queued an event"
+                            );
                         }
                         break;
                     }
@@ -288,8 +320,16 @@ mod tests {
     const ORG: &str = "2f6c1c1e-7d1a-4c55-9a3e-0b6d3c3a9a11";
     const OK: &[u8] = br#"{"type":"recommendation.status_changed","id":"r1","version":2}"#;
 
-    fn msg<'a>(id: Option<&'a str>, org: Option<&'a str>, payload: Option<&'a [u8]>) -> Incoming<'a> {
-        Incoming { outbox_id: id, organisation_id: org, payload }
+    fn msg<'a>(
+        id: Option<&'a str>,
+        org: Option<&'a str>,
+        payload: Option<&'a [u8]>,
+    ) -> Incoming<'a> {
+        Incoming {
+            outbox_id: id,
+            organisation_id: org,
+            payload,
+        }
     }
 
     #[test]
@@ -304,17 +344,42 @@ mod tests {
     #[test]
     fn anything_unusable_is_skipped_with_a_reason() {
         let cases = [
-            (msg(None, Some(ORG), Some(OK)), Skip::MissingHeader("kuki-outbox-id")),
-            (msg(Some("  "), Some(ORG), Some(OK)), Skip::MissingHeader("kuki-outbox-id")),
-            (msg(Some("1"), None, Some(OK)), Skip::MissingHeader("kuki-organisation-id")),
-            (msg(Some("1"), Some("not-a-uuid"), Some(OK)), Skip::BadOrganisationId),
-            (msg(Some("1"), Some(ORG), None), Skip::BadPayload),
-            (msg(Some("1"), Some(ORG), Some(b"garbage")), Skip::BadPayload),
-            (msg(Some("1"), Some(ORG), Some(br#""just a string""#)), Skip::BadPayload),
-            (msg(Some("1"), Some(ORG), Some(b"{}")), Skip::BadPayload),
-            (msg(Some("1"), Some(ORG), Some(br#"{"type":5}"#)), Skip::BadPayload),
             (
-                msg(Some("1"), Some(ORG), Some(br#"{"type":"recommendation.deleted"}"#)),
+                msg(None, Some(ORG), Some(OK)),
+                Skip::MissingHeader("kuki-outbox-id"),
+            ),
+            (
+                msg(Some("  "), Some(ORG), Some(OK)),
+                Skip::MissingHeader("kuki-outbox-id"),
+            ),
+            (
+                msg(Some("1"), None, Some(OK)),
+                Skip::MissingHeader("kuki-organisation-id"),
+            ),
+            (
+                msg(Some("1"), Some("not-a-uuid"), Some(OK)),
+                Skip::BadOrganisationId,
+            ),
+            (msg(Some("1"), Some(ORG), None), Skip::BadPayload),
+            (
+                msg(Some("1"), Some(ORG), Some(b"garbage")),
+                Skip::BadPayload,
+            ),
+            (
+                msg(Some("1"), Some(ORG), Some(br#""just a string""#)),
+                Skip::BadPayload,
+            ),
+            (msg(Some("1"), Some(ORG), Some(b"{}")), Skip::BadPayload),
+            (
+                msg(Some("1"), Some(ORG), Some(br#"{"type":5}"#)),
+                Skip::BadPayload,
+            ),
+            (
+                msg(
+                    Some("1"),
+                    Some(ORG),
+                    Some(br#"{"type":"recommendation.deleted"}"#),
+                ),
                 Skip::UnknownEventType("recommendation.deleted".into()),
             ),
         ];

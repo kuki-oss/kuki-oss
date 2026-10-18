@@ -32,7 +32,12 @@ impl RegistryRouter {
         secrets: Arc<dyn SecretSource>,
         cfg: &WebhookConfig,
     ) -> Result<Self, String> {
-        Ok(Self { pool, secrets, http: client(cfg)?, allow_insecure: cfg.allow_insecure_http })
+        Ok(Self {
+            pool,
+            secrets,
+            http: client(cfg)?,
+            allow_insecure: cfg.allow_insecure_http,
+        })
     }
 }
 
@@ -44,7 +49,10 @@ impl Router for RegistryRouter {
     ) -> BoxFuture<'a, Result<Option<Arc<dyn Adapter>>, String>> {
         async move {
             let wanted = action_type.to_owned();
-            let session = OrgSession { org_id: organisation_id, scope_path: None };
+            let session = OrgSession {
+                org_id: organisation_id,
+                scope_path: None,
+            };
             let found = with_org_tx::<_, sqlx::Error, _>(&self.pool, &session, move |c| {
                 async move { webhook_endpoints::find_enabled(c, organisation_id, &wanted).await }
                     .boxed()

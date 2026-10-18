@@ -184,7 +184,9 @@ pub async fn get_visible(
     ));
     qb.push_bind(org).push(" AND id = ").push_bind(id);
     push_visible(&mut qb, visible);
-    qb.build_query_as::<RecommendationRow>().fetch_optional(c).await
+    qb.build_query_as::<RecommendationRow>()
+        .fetch_optional(c)
+        .await
 }
 
 #[derive(Debug, sqlx::FromRow)]

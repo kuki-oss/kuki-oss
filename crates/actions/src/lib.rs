@@ -6,15 +6,17 @@
 //! [`Job::id`]. Several executors may run side by side: claims never overlap.
 
 mod adapter;
+mod deliveries;
 mod executor;
 mod registry;
-mod webhook;
-mod deliveries;
 pub mod secrets;
+mod webhook;
 
 pub use adapter::{Adapter, Job, Outcome, Router, StaticRouter};
-pub use executor::{ACTOR, Config, Executor, Report};
-pub use secrets::{CachedSecrets, SecretBytes, SecretError, SecretSource, StaticSecrets, valid_reference};
-pub use registry::RegistryRouter;
-pub use webhook::{Delivery, WebhookAdapter, WebhookConfig, client as webhook_client};
 pub use deliveries::{DeliveryConfig, DeliveryReport, DeliveryWorker};
+pub use executor::{ACTOR, Config, Executor, Report};
+pub use registry::RegistryRouter;
+pub use secrets::{
+    CachedSecrets, SecretBytes, SecretError, SecretSource, StaticSecrets, valid_reference,
+};
+pub use webhook::{Delivery, WebhookAdapter, WebhookConfig, client as webhook_client};

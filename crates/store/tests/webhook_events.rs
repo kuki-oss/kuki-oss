@@ -27,17 +27,22 @@ async fn app_pool(admin: &PgPool) -> PgPool {
 
 async fn seed_org(admin: &PgPool, slug: &str) -> Uuid {
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO organisations (id, slug, name, config) VALUES ($1, $2, $2, '{}'::jsonb)")
-        .bind(id)
-        .bind(slug)
-        .execute(admin)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO organisations (id, slug, name, config) VALUES ($1, $2, $2, '{}'::jsonb)",
+    )
+    .bind(id)
+    .bind(slug)
+    .execute(admin)
+    .await
+    .unwrap();
     id
 }
 
 fn session(org: Uuid) -> OrgSession {
-    OrgSession { org_id: org, scope_path: None }
+    OrgSession {
+        org_id: org,
+        scope_path: None,
+    }
 }
 
 fn types(t: &[&str]) -> Vec<String> {
@@ -49,7 +54,13 @@ fn payload(version: i32) -> Value {
             "status": "accepted", "previousStatus": "pending" })
 }
 
-async fn subscribe(app: &PgPool, org: Uuid, name: &str, t: &[&str], enabled: bool) -> ws::Subscription {
+async fn subscribe(
+    app: &PgPool,
+    org: Uuid,
+    name: &str,
+    t: &[&str],
+    enabled: bool,
+) -> ws::Subscription {
     let (name, t) = (name.to_owned(), types(t));
     with_org_tx::<_, sqlx::Error, _>(app, &session(org), move |c| {
         async move { ws::upsert(c, org, &name, URL, REF, &t, enabled).await }.boxed()
@@ -88,7 +99,8 @@ async fn subscriptions_match_on_event_type_and_enabled(admin: PgPool) {
 
     let (changed, created) = with_org_tx::<_, sqlx::Error, _>(&app, &session(org), move |c| {
         async move {
-            let names = |v: Vec<ws::Subscription>| v.into_iter().map(|s| s.name).collect::<Vec<_>>();
+            let names =
+                |v: Vec<ws::Subscription>| v.into_iter().map(|s| s.name).collect::<Vec<_>>();
             Ok((
                 names(ws::matching(c, org, CHANGED).await?),
                 names(ws::matching(c, org, CREATED).await?),
@@ -151,8 +163,12 @@ async fn the_database_rejects_bad_subscriptions(admin: PgPool) {
     for (name, url, secret_ref, t) in cases {
         let (name, url, secret_ref) = (name.to_owned(), url.to_owned(), secret_ref.to_owned());
         let r = with_org_tx::<_, sqlx::Error, _>(&app, &session(org), move |c| {
-            async move { ws::upsert(c, org, &name, &url, &secret_ref, &t, true).await.map(|_| ()) }
-                .boxed()
+            async move {
+                ws::upsert(c, org, &name, &url, &secret_ref, &t, true)
+                    .await
+                    .map(|_| ())
+            }
+            .boxed()
         })
         .await;
         assert!(r.is_err());
@@ -198,7 +214,11 @@ async fn claims_are_limited_leased_and_cross_organisation(admin: PgPool) {
     // Oldest first, limited, with the subscription's address and secret reference.
     let first = claim(&app, 2, 60.0).await;
     assert_eq!(events(&first), ["e1", "e2"]);
-    assert!(first.iter().all(|r| r.attempts == 1 && r.url == URL && r.secret_ref == REF));
+    assert!(
+        first
+            .iter()
+            .all(|r| r.attempts == 1 && r.url == URL && r.secret_ref == REF)
+    );
     assert!(first.iter().all(|r| r.organisation_id == a));
 
     // The rest, from another organisation, while the first two are under a live lease.
@@ -247,11 +267,19 @@ async fn finish_and_retry_only_act_on_a_running_row_of_the_named_organisation(ad
     let row = wd::claim(&mut c, 10, 60.0).await.unwrap().remove(0);
 
     // Another organisation cannot settle it.
-    assert!(!wd::finish(&mut c, b, row.id, wd::Ending::Delivered, None).await.unwrap());
+    assert!(
+        !wd::finish(&mut c, b, row.id, wd::Ending::Delivered, None)
+            .await
+            .unwrap()
+    );
     assert!(!wd::retry(&mut c, b, row.id, "boom", 0.0).await.unwrap());
 
     // A retry puts it back, hidden until its delay passes.
-    assert!(wd::retry(&mut c, a, row.id, "HTTP 503", 3600.0).await.unwrap());
+    assert!(
+        wd::retry(&mut c, a, row.id, "HTTP 503", 3600.0)
+            .await
+            .unwrap()
+    );
     assert!(wd::claim(&mut c, 10, 60.0).await.unwrap().is_empty());
     sqlx::query("UPDATE webhook_deliveries SET not_before = now() WHERE id = $1")
         .bind(row.id)
@@ -263,8 +291,16 @@ async fn finish_and_retry_only_act_on_a_running_row_of_the_named_organisation(ad
     assert_eq!(again[0].attempts, 2);
 
     // Delivered once; a second settlement finds nothing running.
-    assert!(wd::finish(&mut c, a, row.id, wd::Ending::Delivered, None).await.unwrap());
-    assert!(!wd::finish(&mut c, a, row.id, wd::Ending::Delivered, None).await.unwrap());
+    assert!(
+        wd::finish(&mut c, a, row.id, wd::Ending::Delivered, None)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !wd::finish(&mut c, a, row.id, wd::Ending::Delivered, None)
+            .await
+            .unwrap()
+    );
     let (status, finished, last_error): (String, bool, Option<String>) = sqlx::query_as(
         "SELECT status, finished_at IS NOT NULL, last_error FROM webhook_deliveries WHERE id = $1",
     )
@@ -279,7 +315,17 @@ async fn finish_and_retry_only_act_on_a_running_row_of_the_named_organisation(ad
     // Giving up parks it as dead, with the reason.
     fan_out(&app, a, "e2", CHANGED, payload(2)).await;
     let dead = wd::claim(&mut c, 10, 60.0).await.unwrap().remove(0);
-    assert!(wd::finish(&mut c, a, dead.id, wd::Ending::Dead, Some("gave up after 8 attempts")).await.unwrap());
+    assert!(
+        wd::finish(
+            &mut c,
+            a,
+            dead.id,
+            wd::Ending::Dead,
+            Some("gave up after 8 attempts")
+        )
+        .await
+        .unwrap()
+    );
     let (status, last_error): (String, Option<String>) =
         sqlx::query_as("SELECT status, last_error FROM webhook_deliveries WHERE id = $1")
             .bind(dead.id)

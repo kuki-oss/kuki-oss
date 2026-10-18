@@ -1,7 +1,7 @@
 use futures::FutureExt;
-use kuki_store::session::{with_org_tx, OrgSession};
+use kuki_store::session::{OrgSession, with_org_tx};
 use kuki_store::webhook_endpoints as we;
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::{PgPool, postgres::PgPoolOptions};
 use uuid::Uuid;
 
 async fn app_pool(admin: &PgPool) -> PgPool {
@@ -20,17 +20,22 @@ async fn app_pool(admin: &PgPool) -> PgPool {
 
 async fn seed_org(admin: &PgPool, slug: &str) -> Uuid {
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO organisations (id, slug, name, config) VALUES ($1, $2, $2, '{}'::jsonb)")
-        .bind(id)
-        .bind(slug)
-        .execute(admin)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO organisations (id, slug, name, config) VALUES ($1, $2, $2, '{}'::jsonb)",
+    )
+    .bind(id)
+    .bind(slug)
+    .execute(admin)
+    .await
+    .unwrap();
     id
 }
 
 fn session(org: Uuid) -> OrgSession {
-    OrgSession { org_id: org, scope_path: None }
+    OrgSession {
+        org_id: org,
+        scope_path: None,
+    }
 }
 
 const URL: &str = "https://example.org/hooks/po";
@@ -43,7 +48,15 @@ async fn upsert_replaces_in_place_and_keeps_the_id(admin: PgPool) {
     let (first, second) = with_org_tx::<_, sqlx::Error, _>(&app, &session(org), move |c| {
         async move {
             let a = we::upsert(c, org, "draft_po", URL, REF, true).await?;
-            let b = we::upsert(c, org, "draft_po", "http://localhost:9/x", "kuki/other", false).await?;
+            let b = we::upsert(
+                c,
+                org,
+                "draft_po",
+                "http://localhost:9/x",
+                "kuki/other",
+                false,
+            )
+            .await?;
             Ok((a, b))
         }
         .boxed()
@@ -63,7 +76,12 @@ async fn tenants_cannot_see_or_remove_each_others_endpoints(admin: PgPool) {
     let app = app_pool(&admin).await;
 
     with_org_tx::<_, sqlx::Error, _>(&app, &session(a), move |c| {
-        async move { we::upsert(c, a, "draft_po", URL, REF, true).await.map(|_| ()) }.boxed()
+        async move {
+            we::upsert(c, a, "draft_po", URL, REF, true)
+                .await
+                .map(|_| ())
+        }
+        .boxed()
     })
     .await
     .unwrap();
@@ -124,7 +142,12 @@ async fn the_database_rejects_bad_urls_and_secret_refs(admin: PgPool) {
         (URL, "kuki/has space"),
     ] {
         let r = with_org_tx::<_, sqlx::Error, _>(&app, &session(org), move |c| {
-            async move { we::upsert(c, org, "t", url, secret_ref, true).await.map(|_| ()) }.boxed()
+            async move {
+                we::upsert(c, org, "t", url, secret_ref, true)
+                    .await
+                    .map(|_| ())
+            }
+            .boxed()
         })
         .await;
         assert!(r.is_err(), "accepted url={url:?} ref={secret_ref:?}");
@@ -138,7 +161,10 @@ async fn remove_reports_whether_anything_was_deleted(admin: PgPool) {
     let (first, second) = with_org_tx::<_, sqlx::Error, _>(&app, &session(org), move |c| {
         async move {
             we::upsert(c, org, "t", URL, REF, true).await?;
-            Ok((we::remove(c, org, "t").await?, we::remove(c, org, "t").await?))
+            Ok((
+                we::remove(c, org, "t").await?,
+                we::remove(c, org, "t").await?,
+            ))
         }
         .boxed()
     })

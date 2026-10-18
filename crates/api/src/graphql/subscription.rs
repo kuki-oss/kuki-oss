@@ -14,7 +14,9 @@
 use async_graphql::{Context, Error, InputObject, Result, SimpleObject, Subscription};
 use futures::{FutureExt, StreamExt, stream::BoxStream};
 use kuki_outbox::{EventFeed, LiveEvent};
-use kuki_store::{recommendation_reads as reads, recommendations::RecommendationRow, session::with_org_tx};
+use kuki_store::{
+    recommendation_reads as reads, recommendations::RecommendationRow, session::with_org_tx,
+};
 use kuki_types as kt;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -49,14 +51,20 @@ fn validate(f: SubscriptionFilter) -> Result<Want> {
         None => None,
         Some(t) if t.is_empty() => return Err(validation("decisionTypes must not be empty", None)),
         Some(t) if t.iter().any(|x| x.is_empty() || x.len() > 200) => {
-            return Err(validation("decisionTypes entries must be 1 to 200 characters", None));
+            return Err(validation(
+                "decisionTypes entries must be 1 to 200 characters",
+                None,
+            ));
         }
         Some(t) => Some(t),
     };
     if let Some(u) = &f.org_unit_path {
         check_ltree(u, "orgUnitPath")?;
     }
-    Ok(Want { decision_types, under: f.org_unit_path })
+    Ok(Want {
+        decision_types,
+        under: f.org_unit_path,
+    })
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -108,7 +116,10 @@ async fn load(s: &Live, id: Uuid) -> Result<Option<RecommendationRow>, sqlx::Err
     with_org_tx::<_, sqlx::Error, _>(&s.pool, &s.principal.session, move |c| {
         async move {
             let floor = reads::display_floor(c, org).await?;
-            let v = reads::Visible { under: under.as_deref(), min_confidence: floor };
+            let v = reads::Visible {
+                under: under.as_deref(),
+                min_confidence: floor,
+            };
             reads::get_visible(c, org, id, &v).await
         }
         .boxed()
@@ -141,9 +152,13 @@ fn deliveries(live: Live) -> impl futures::Stream<Item = Delivered> + Send + 'st
                             .map(KukiRecommendationStatus::from);
                         return Some((Delivered { rec, previous }, s));
                     }
-                    Err(e) => tracing::warn!(error = %e.message, "a subscribed recommendation did not parse"),
+                    Err(e) => {
+                        tracing::warn!(error = %e.message, "a subscribed recommendation did not parse")
+                    }
                 },
-                Err(e) => tracing::warn!(error = %e, "could not load a recommendation for a subscriber"),
+                Err(e) => {
+                    tracing::warn!(error = %e, "could not load a recommendation for a subscriber")
+                }
             }
         }
     })
@@ -162,7 +177,13 @@ fn open(
             "live subscriptions are not enabled on this server (KUKI_KAFKA_BROKERS is not set)",
         ))
     })?;
-    let live = Live { rx: feed.subscribe(), principal, pool, kind, want };
+    let live = Live {
+        rx: feed.subscribe(),
+        principal,
+        pool,
+        kind,
+        want,
+    };
     Ok(deliveries(live).boxed())
 }
 
@@ -177,7 +198,9 @@ impl SubscriptionRoot {
         ctx: &Context<'_>,
         filter: Option<SubscriptionFilter>,
     ) -> Result<BoxStream<'static, KukiRecommendation>> {
-        Ok(open(ctx, "recommendation.created", filter)?.map(|d| d.rec).boxed())
+        Ok(open(ctx, "recommendation.created", filter)?
+            .map(|d| d.rec)
+            .boxed())
     }
 
     /// Material change updated in place (spec 7.4).
@@ -187,7 +210,9 @@ impl SubscriptionRoot {
         ctx: &Context<'_>,
         filter: Option<SubscriptionFilter>,
     ) -> Result<BoxStream<'static, KukiRecommendation>> {
-        Ok(open(ctx, "recommendation.updated", filter)?.map(|d| d.rec).boxed())
+        Ok(open(ctx, "recommendation.updated", filter)?
+            .map(|d| d.rec)
+            .boxed())
     }
 
     #[graphql(guard = "RequiresScope::new(\"decisions:read\")")]
@@ -198,7 +223,10 @@ impl SubscriptionRoot {
     ) -> Result<BoxStream<'static, RecommendationStatusChange>> {
         Ok(open(ctx, "recommendation.status_changed", filter)?
             .filter_map(|d| async move {
-                Some(RecommendationStatusChange { recommendation: d.rec, previous_status: d.previous? })
+                Some(RecommendationStatusChange {
+                    recommendation: d.rec,
+                    previous_status: d.previous?,
+                })
             })
             .boxed())
     }
@@ -213,22 +241,54 @@ mod tests {
     const KIND: &str = "recommendation.status_changed";
 
     fn ev(org: Uuid, kind: &str, payload: Value) -> LiveEvent {
-        LiveEvent { organisation_id: org, event_id: "1".into(), event_type: kind.into(), payload }
+        LiveEvent {
+            organisation_id: org,
+            event_id: "1".into(),
+            event_type: kind.into(),
+            payload,
+        }
     }
 
     #[test]
     fn route_accepts_only_matching_events() {
         let (org, id) = (Uuid::new_v4(), Uuid::new_v4());
         let payload = json!({ "id": id.to_string(), "decisionType": "inventory.replenish", "previousStatus": "pending" });
-        let want = Want { decision_types: Some(vec!["inventory.replenish".into()]), under: None };
+        let want = Want {
+            decision_types: Some(vec!["inventory.replenish".into()]),
+            under: None,
+        };
 
         let got = route(&ev(org, KIND, payload.clone()), org, KIND, &want).unwrap();
-        assert_eq!(got, Routed { id, previous: Some("pending".into()) });
+        assert_eq!(
+            got,
+            Routed {
+                id,
+                previous: Some("pending".into())
+            }
+        );
 
-        assert!(route(&ev(Uuid::new_v4(), KIND, payload.clone()), org, KIND, &want).is_none(), "other organisation");
-        assert!(route(&ev(org, "recommendation.created", payload.clone()), org, KIND, &want).is_none(), "other event type");
-        let other = Want { decision_types: Some(vec!["scheduling.conflict".into()]), under: None };
-        assert!(route(&ev(org, KIND, payload.clone()), org, KIND, &other).is_none(), "other decision type");
+        assert!(
+            route(&ev(Uuid::new_v4(), KIND, payload.clone()), org, KIND, &want).is_none(),
+            "other organisation"
+        );
+        assert!(
+            route(
+                &ev(org, "recommendation.created", payload.clone()),
+                org,
+                KIND,
+                &want
+            )
+            .is_none(),
+            "other event type"
+        );
+        let other = Want {
+            decision_types: Some(vec!["scheduling.conflict".into()]),
+            under: None,
+        };
+        assert!(
+            route(&ev(org, KIND, payload.clone()), org, KIND, &other).is_none(),
+            "other decision type"
+        );
         // No filter: any decision type passes.
         assert!(route(&ev(org, KIND, payload), org, KIND, &Want::default()).is_some());
     }
@@ -244,11 +304,20 @@ mod tests {
     #[test]
     fn filters_are_validated() {
         assert!(validate(SubscriptionFilter::default()).is_ok());
-        let empty = SubscriptionFilter { decision_types: Some(vec![]), org_unit_path: None };
+        let empty = SubscriptionFilter {
+            decision_types: Some(vec![]),
+            org_unit_path: None,
+        };
         assert!(validate(empty).is_err());
-        let bad_path = SubscriptionFilter { decision_types: None, org_unit_path: Some("not a path!".into()) };
+        let bad_path = SubscriptionFilter {
+            decision_types: None,
+            org_unit_path: Some("not a path!".into()),
+        };
         assert!(validate(bad_path).is_err());
-        let ok = SubscriptionFilter { decision_types: Some(vec!["a.b".into()]), org_unit_path: Some("hq.east".into()) };
+        let ok = SubscriptionFilter {
+            decision_types: Some(vec!["a.b".into()]),
+            org_unit_path: Some("hq.east".into()),
+        };
         assert!(validate(ok).is_ok());
     }
 }

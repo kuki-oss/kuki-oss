@@ -46,7 +46,9 @@ impl EventFeed {
     /// A feed with no Kafka behind it. Events arrive through [`EventFeed::publish`]; this is
     /// what tests of the subscription layer use.
     pub fn local(capacity: usize) -> Self {
-        Self { tx: broadcast::channel(capacity.max(1)).0 }
+        Self {
+            tx: broadcast::channel(capacity.max(1)).0,
+        }
     }
 
     /// Delivers an event to every current receiver and returns how many there were.
@@ -72,7 +74,9 @@ impl EventFeed {
             .set("auto.offset.reset", "latest")
             .create()
             .map_err(|e| RelayError::Kafka(e.to_string()))?;
-        consumer.subscribe(&[topic]).map_err(|e| RelayError::Kafka(e.to_string()))?;
+        consumer
+            .subscribe(&[topic])
+            .map_err(|e| RelayError::Kafka(e.to_string()))?;
 
         let feed = Self::local(capacity);
         let task = tokio::spawn(pump(consumer, feed.tx.clone(), stop));
@@ -80,7 +84,11 @@ impl EventFeed {
     }
 }
 
-async fn pump(consumer: StreamConsumer, tx: broadcast::Sender<LiveEvent>, mut stop: watch::Receiver<bool>) {
+async fn pump(
+    consumer: StreamConsumer,
+    tx: broadcast::Sender<LiveEvent>,
+    mut stop: watch::Receiver<bool>,
+) {
     loop {
         let received = tokio::select! {
             _ = stop.wait_for(|s| *s) => return,

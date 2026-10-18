@@ -136,7 +136,10 @@ impl DeliveryWorker {
             let mut c = self.pool.acquire().await?;
             store::claim(&mut c, self.config.batch, self.config.lease.as_secs_f64()).await?
         };
-        let mut report = DeliveryReport { claimed: claimed.len(), ..DeliveryReport::default() };
+        let mut report = DeliveryReport {
+            claimed: claimed.len(),
+            ..DeliveryReport::default()
+        };
         let steps = futures::future::join_all(claimed.into_iter().map(|d| async move {
             let id = d.id;
             (id, self.process(d).await)
@@ -188,7 +191,13 @@ impl DeliveryWorker {
         let body = match serde_json::to_vec(&d.payload) {
             Ok(b) => b,
             Err(e) => {
-                return self.settle(&d, Ending::Dead, Some(format!("cannot encode payload: {e}"))).await;
+                return self
+                    .settle(
+                        &d,
+                        Ending::Dead,
+                        Some(format!("cannot encode payload: {e}")),
+                    )
+                    .await;
             }
         };
         let headers = [
@@ -282,11 +291,23 @@ mod tests {
     fn configuration_rules() {
         assert!(DeliveryConfig::default().validate().is_ok());
         let bad = [
-            DeliveryConfig { batch: 0, ..DeliveryConfig::default() },
-            DeliveryConfig { max_attempts: 0, ..DeliveryConfig::default() },
-            DeliveryConfig { attempt_timeout: Duration::ZERO, ..DeliveryConfig::default() },
+            DeliveryConfig {
+                batch: 0,
+                ..DeliveryConfig::default()
+            },
+            DeliveryConfig {
+                max_attempts: 0,
+                ..DeliveryConfig::default()
+            },
+            DeliveryConfig {
+                attempt_timeout: Duration::ZERO,
+                ..DeliveryConfig::default()
+            },
             // A timeout as long as the lease would let a slow receiver be called twice.
-            DeliveryConfig { attempt_timeout: Duration::from_secs(120), ..DeliveryConfig::default() },
+            DeliveryConfig {
+                attempt_timeout: Duration::from_secs(120),
+                ..DeliveryConfig::default()
+            },
         ];
         for c in bad {
             assert!(c.validate().is_err(), "{c:?}");

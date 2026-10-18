@@ -12,7 +12,12 @@ async fn kafka_events_reach_a_receiver() {
         return;
     };
     let topic = format!("kuki.test.feed.{}", Uuid::new_v4().simple());
-    let kafka = KafkaConfig { brokers, client_id: "kuki-test".into(), partitions: 1, replication: 1 };
+    let kafka = KafkaConfig {
+        brokers,
+        client_id: "kuki-test".into(),
+        partitions: 1,
+        replication: 1,
+    };
     ensure_topics(&kafka, &[topic.as_str()]).await.unwrap();
 
     let (stop, stopped) = watch::channel(false);

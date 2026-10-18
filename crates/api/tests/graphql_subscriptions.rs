@@ -34,8 +34,10 @@ async fn spawn_server(app_pool: PgPool, feed: Option<EventFeed>) -> String {
 
 async fn connect(url: &str) -> Socket {
     let mut req = url.into_client_request().unwrap();
-    req.headers_mut()
-        .insert("Sec-WebSocket-Protocol", "graphql-transport-ws".parse().unwrap());
+    req.headers_mut().insert(
+        "Sec-WebSocket-Protocol",
+        "graphql-transport-ws".parse().unwrap(),
+    );
     connect_async(req).await.unwrap().0
 }
 
@@ -72,20 +74,32 @@ async fn init(ws: &mut Socket, token: &str) -> Option<Value> {
 
 async fn open(url: &str, token: &str) -> Socket {
     let mut ws = connect(url).await;
-    let ack = init(&mut ws, token).await.expect("socket closed during init");
+    let ack = init(&mut ws, token)
+        .await
+        .expect("socket closed during init");
     assert_eq!(ack["type"], "connection_ack", "{ack}");
     ws
 }
 
 async fn subscribe(ws: &mut Socket, query: &str) {
-    send(ws, json!({ "id": "1", "type": "subscribe", "payload": { "query": query } })).await;
+    send(
+        ws,
+        json!({ "id": "1", "type": "subscribe", "payload": { "query": query } }),
+    )
+    .await;
 }
 
 fn is_failure(m: &Value) -> bool {
     m["type"] == "error" || (m["type"] == "next" && m["payload"]["errors"].is_array())
 }
 
-fn event(org: Uuid, rec: Uuid, kind: &str, decision_type: &str, previous: Option<&str>) -> LiveEvent {
+fn event(
+    org: Uuid,
+    rec: Uuid,
+    kind: &str,
+    decision_type: &str,
+    previous: Option<&str>,
+) -> LiveEvent {
     LiveEvent {
         organisation_id: org,
         event_id: Uuid::new_v4().to_string(),
@@ -155,16 +169,24 @@ async fn seed_rec(app: &PgPool, org: Uuid, unit: Option<Uuid>, decision_type: &s
         provenance: serde_json::to_value(&provenance).unwrap(),
         expires_at: None,
     };
-    with_org_tx::<_, sqlx::Error, _>(app, &OrgSession { org_id: org, scope_path: None }, move |c| {
-        async move { upsert_pending(c, org, &new, Utc::now()).await.map(|_| ()) }.boxed()
-    })
+    with_org_tx::<_, sqlx::Error, _>(
+        app,
+        &OrgSession {
+            org_id: org,
+            scope_path: None,
+        },
+        move |c| async move { upsert_pending(c, org, &new, Utc::now()).await.map(|_| ()) }.boxed(),
+    )
     .await
     .unwrap();
     id
 }
 
 fn id_of(m: &Value, field: &str) -> String {
-    m["payload"]["data"][field]["id"].as_str().unwrap_or_default().to_owned()
+    m["payload"]["data"][field]["id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
 }
 
 #[sqlx::test(migrations = "../../migrations")]
@@ -223,20 +245,32 @@ async fn status_changes_reach_a_subscriber_with_the_previous_status(admin: PgPoo
     let m = first_delivery(
         &mut ws,
         &feed,
-        vec![event(org, rec, CHANGED, "inventory.replenish", Some("pending"))],
+        vec![event(
+            org,
+            rec,
+            CHANGED,
+            "inventory.replenish",
+            Some("pending"),
+        )],
     )
     .await;
 
     let change = &m["payload"]["data"]["recommendationStatusChanged"];
     assert_eq!(change["previousStatus"], "PENDING");
     assert_eq!(change["recommendation"]["id"], rec.to_string());
-    assert_eq!(change["recommendation"]["decisionType"], "inventory.replenish");
+    assert_eq!(
+        change["recommendation"]["decisionType"],
+        "inventory.replenish"
+    );
 }
 
 #[sqlx::test(migrations = "../../migrations")]
 async fn filters_and_tenancy_decide_what_is_delivered(admin: PgPool) {
     let app = common::app_pool(&admin).await;
-    let (org, other) = (common::seed_org(&admin, "a").await, common::seed_org(&admin, "b").await);
+    let (org, other) = (
+        common::seed_org(&admin, "a").await,
+        common::seed_org(&admin, "b").await,
+    );
     let token = common::seed_key(&admin, org, &["decisions:read"]).await;
     let wanted = seed_rec(&app, org, None, "inventory.replenish").await;
     let wrong_type = seed_rec(&app, org, None, "scheduling.conflict").await;

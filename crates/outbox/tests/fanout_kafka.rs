@@ -20,11 +20,13 @@ async fn events_flow_from_kafka_to_the_delivery_queue(admin: PgPool) {
     };
 
     let org = Uuid::new_v4();
-    sqlx::query("INSERT INTO organisations (id, slug, name, config) VALUES ($1, 'a', 'a', '{}'::jsonb)")
-        .bind(org)
-        .execute(&admin)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO organisations (id, slug, name, config) VALUES ($1, 'a', 'a', '{}'::jsonb)",
+    )
+    .bind(org)
+    .execute(&admin)
+    .await
+    .unwrap();
     let app = PgPoolOptions::new()
         .max_connections(4)
         .after_connect(|conn, _meta| {
@@ -36,20 +38,40 @@ async fn events_flow_from_kafka_to_the_delivery_queue(admin: PgPool) {
         .connect_with((*admin.connect_options()).clone())
         .await
         .unwrap();
-    with_org_tx::<_, sqlx::Error, _>(&app, &OrgSession { org_id: org, scope_path: None }, move |c| {
-        async move {
-            ws::upsert(c, org, "ops", "https://example.org/h", "kuki/webhooks/acme/events", &[CHANGED.to_string()], true)
+    with_org_tx::<_, sqlx::Error, _>(
+        &app,
+        &OrgSession {
+            org_id: org,
+            scope_path: None,
+        },
+        move |c| {
+            async move {
+                ws::upsert(
+                    c,
+                    org,
+                    "ops",
+                    "https://example.org/h",
+                    "kuki/webhooks/acme/events",
+                    &[CHANGED.to_string()],
+                    true,
+                )
                 .await
                 .map(|_| ())
-        }
-        .boxed()
-    })
+            }
+            .boxed()
+        },
+    )
     .await
     .unwrap();
 
     // A topic and group of its own, so nothing else on the broker interferes.
     let topic = format!("kuki.test.fanout.{}", Uuid::new_v4().simple());
-    let kafka = KafkaConfig { brokers, client_id: "kuki-test".into(), partitions: 1, replication: 1 };
+    let kafka = KafkaConfig {
+        brokers,
+        client_id: "kuki-test".into(),
+        partitions: 1,
+        replication: 1,
+    };
     ensure_topics(&kafka, &[topic.as_str()]).await.unwrap();
 
     let event = |version: i32| json!({ "type": CHANGED, "id": "r1", "version": version });
@@ -69,7 +91,10 @@ async fn events_flow_from_kafka_to_the_delivery_queue(admin: PgPool) {
         message(101, event(2)),
         message(103, event(3)),
     ];
-    let published = KafkaPublisher::connect(&kafka).unwrap().publish(&batch).await;
+    let published = KafkaPublisher::connect(&kafka)
+        .unwrap()
+        .publish(&batch)
+        .await;
     assert_eq!(published.acked, 4);
     assert!(published.failure.is_none());
 

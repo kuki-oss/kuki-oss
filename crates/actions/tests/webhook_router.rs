@@ -20,12 +20,14 @@ async fn app_pool(admin: &PgPool) -> PgPool {
 
 async fn seed_org(admin: &PgPool, slug: &str) -> Uuid {
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO organisations (id, slug, name, config) VALUES ($1, $2, $2, '{}'::jsonb)")
-        .bind(id)
-        .bind(slug)
-        .execute(admin)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO organisations (id, slug, name, config) VALUES ($1, $2, $2, '{}'::jsonb)",
+    )
+    .bind(id)
+    .bind(slug)
+    .execute(admin)
+    .await
+    .unwrap();
     id
 }
 
@@ -45,16 +47,32 @@ async fn endpoint(admin: &PgPool, org: Uuid, action_type: &str, url: &str, enabl
 }
 
 async fn router(admin: &PgPool) -> RegistryRouter {
-    RegistryRouter::new(app_pool(admin).await, Arc::new(StaticSecrets::new()), &WebhookConfig::default())
-        .unwrap()
+    RegistryRouter::new(
+        app_pool(admin).await,
+        Arc::new(StaticSecrets::new()),
+        &WebhookConfig::default(),
+    )
+    .unwrap()
 }
 
 #[sqlx::test(migrations = "../../migrations")]
 async fn a_registered_action_routes_to_its_endpoint_without_leaking_credentials(admin: PgPool) {
     let org = seed_org(&admin, "a").await;
-    endpoint(&admin, org, "draft_po", "https://user:pw@example.org/hooks/po?token=abc", true).await;
+    endpoint(
+        &admin,
+        org,
+        "draft_po",
+        "https://user:pw@example.org/hooks/po?token=abc",
+        true,
+    )
+    .await;
 
-    let adapter = router(&admin).await.route(org, "draft_po").await.unwrap().expect("routed");
+    let adapter = router(&admin)
+        .await
+        .route(org, "draft_po")
+        .await
+        .unwrap()
+        .expect("routed");
     assert_eq!(adapter.label(), "webhook:https://example.org/hooks/po");
 }
 

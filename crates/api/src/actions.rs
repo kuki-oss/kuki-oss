@@ -13,8 +13,8 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use kuki_actions::{
-    CachedSecrets, Config as ExecutorConfig, Executor, RegistryRouter, SecretSource, WebhookConfig, DeliveryConfig, DeliveryWorker,
-    valid_reference,
+    CachedSecrets, Config as ExecutorConfig, DeliveryConfig, DeliveryWorker, Executor,
+    RegistryRouter, SecretSource, WebhookConfig, valid_reference,
 };
 use tokio::sync::watch;
 
@@ -71,7 +71,11 @@ impl ActionsConfig {
         Ok(Self {
             kv_mount,
             secret_ttl,
-            webhook: WebhookConfig { timeout, allow_insecure_http, ..WebhookConfig::default() },
+            webhook: WebhookConfig {
+                timeout,
+                allow_insecure_http,
+                ..WebhookConfig::default()
+            },
         })
     }
 }
@@ -88,10 +92,16 @@ fn seconds(
         Some(raw) => raw
             .trim()
             .parse::<u64>()
-            .map_err(|e| ConfigError::Invalid { name, reason: e.to_string() })?,
+            .map_err(|e| ConfigError::Invalid {
+                name,
+                reason: e.to_string(),
+            })?,
     };
     if !(min..=max).contains(&n) {
-        return Err(ConfigError::Invalid { name, reason: format!("must be between {min} and {max}") });
+        return Err(ConfigError::Invalid {
+            name,
+            reason: format!("must be between {min} and {max}"),
+        });
     }
     Ok(Duration::from_secs(n))
 }
@@ -109,8 +119,8 @@ pub async fn run_actions(api: ApiConfig) -> Result<(), ServeError> {
 
     let kv = BaoKv::new(bao, cfg.kv_mount.clone()).map_err(ServeError::Config)?;
     let secrets: Arc<dyn SecretSource> = Arc::new(CachedSecrets::new(kv, cfg.secret_ttl));
-    let router =
-        RegistryRouter::new(pool.clone(), secrets.clone(), &cfg.webhook).map_err(ServeError::Config)?;
+    let router = RegistryRouter::new(pool.clone(), secrets.clone(), &cfg.webhook)
+        .map_err(ServeError::Config)?;
     let executor = Executor::new(pool.clone(), Arc::new(router), ExecutorConfig::default())
         .map_err(ServeError::Config)?;
     let deliveries = DeliveryWorker::new(pool, secrets, &cfg.webhook, DeliveryConfig::default())
@@ -140,7 +150,12 @@ mod tests {
     use super::*;
 
     fn env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
-        move |k| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string())
+        move |k| {
+            pairs
+                .iter()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| v.to_string())
+        }
     }
 
     #[test]

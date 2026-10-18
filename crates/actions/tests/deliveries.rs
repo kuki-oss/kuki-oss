@@ -43,22 +43,35 @@ impl Seen {
     }
     fn header_values(&self, name: &str) -> Vec<String> {
         let all = self.0.lock().unwrap();
-        let mut v: Vec<String> =
-            all.iter().map(|h| h.headers[name].to_str().unwrap().to_owned()).collect();
+        let mut v: Vec<String> = all
+            .iter()
+            .map(|h| h.headers[name].to_str().unwrap().to_owned())
+            .collect();
         v.sort();
         v
     }
 }
 
 async fn handle(State(seen): State<Seen>, uri: Uri, headers: HeaderMap, body: Bytes) -> Response {
-    seen.0.lock().unwrap().push(Hit { headers, body: body.to_vec() });
-    match uri.path().split('/').filter(|s| !s.is_empty()).collect::<Vec<_>>().as_slice() {
+    seen.0.lock().unwrap().push(Hit {
+        headers,
+        body: body.to_vec(),
+    });
+    match uri
+        .path()
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
         ["json"] => (StatusCode::OK, "{\"ok\":true}").into_response(),
         ["slow"] => {
             tokio::time::sleep(Duration::from_secs(2)).await;
             StatusCode::OK.into_response()
         }
-        ["s", code] => (StatusCode::from_u16(code.parse().unwrap()).unwrap(), "nope").into_response(),
+        ["s", code] => {
+            (StatusCode::from_u16(code.parse().unwrap()).unwrap(), "nope").into_response()
+        }
         _ => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -88,17 +101,22 @@ async fn app_pool(admin: &PgPool) -> PgPool {
 
 async fn seed_org(admin: &PgPool, slug: &str) -> Uuid {
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO organisations (id, slug, name, config) VALUES ($1, $2, $2, '{}'::jsonb)")
-        .bind(id)
-        .bind(slug)
-        .execute(admin)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO organisations (id, slug, name, config) VALUES ($1, $2, $2, '{}'::jsonb)",
+    )
+    .bind(id)
+    .bind(slug)
+    .execute(admin)
+    .await
+    .unwrap();
     id
 }
 
 fn session(org: Uuid) -> OrgSession {
-    OrgSession { org_id: org, scope_path: None }
+    OrgSession {
+        org_id: org,
+        scope_path: None,
+    }
 }
 
 fn payload(version: i32) -> Value {
@@ -110,7 +128,9 @@ async fn subscribe(app: &PgPool, org: Uuid, name: &str, url: &str) {
     let (name, url) = (name.to_owned(), url.to_owned());
     with_org_tx::<_, sqlx::Error, _>(app, &session(org), move |c| {
         async move {
-            ws::upsert(c, org, &name, &url, REF, &[CHANGED.to_string()], true).await.map(|_| ())
+            ws::upsert(c, org, &name, &url, REF, &[CHANGED.to_string()], true)
+                .await
+                .map(|_| ())
         }
         .boxed()
     })
@@ -121,7 +141,12 @@ async fn subscribe(app: &PgPool, org: Uuid, name: &str, url: &str) {
 async fn fan_out(app: &PgPool, org: Uuid, event_id: &str, p: Value) {
     let e = event_id.to_owned();
     with_org_tx::<_, sqlx::Error, _>(app, &session(org), move |c| {
-        async move { wd::enqueue_for_event(c, org, &e, CHANGED, &p).await.map(|_| ()) }.boxed()
+        async move {
+            wd::enqueue_for_event(c, org, &e, CHANGED, &p)
+                .await
+                .map(|_| ())
+        }
+        .boxed()
     })
     .await
     .unwrap();
@@ -137,7 +162,10 @@ fn worker(app: &PgPool, secrets: Arc<dyn SecretSource>, max_attempts: i32) -> De
         connect_timeout: Duration::from_millis(500),
         allow_insecure_http: true,
     };
-    let config = DeliveryConfig { max_attempts, ..DeliveryConfig::default() };
+    let config = DeliveryConfig {
+        max_attempts,
+        ..DeliveryConfig::default()
+    };
     DeliveryWorker::new(app.clone(), secrets, &webhook, config).unwrap()
 }
 
@@ -183,13 +211,22 @@ async fn a_queued_event_is_delivered_signed_with_its_event_headers(admin: PgPool
     assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), payload(2));
     let sig = headers["kuki-signature"].to_str().unwrap();
     let now = chrono::Utc::now().timestamp();
-    assert_eq!(kuki_outbox::signing::verify(SECRET, sig, &body, now), Ok(()));
+    assert_eq!(
+        kuki_outbox::signing::verify(SECRET, sig, &body, now),
+        Ok(())
+    );
     assert_eq!(headers["kuki-event-id"].to_str().unwrap(), "e1");
     assert_eq!(headers["kuki-event-type"].to_str().unwrap(), CHANGED);
-    assert_eq!(headers["kuki-organisation-id"].to_str().unwrap(), org.to_string());
+    assert_eq!(
+        headers["kuki-organisation-id"].to_str().unwrap(),
+        org.to_string()
+    );
     assert_eq!(headers["kuki-attempt"].to_str().unwrap(), "1");
 
-    assert_eq!(states(&admin).await, [("ops".into(), "delivered".into(), 1, None)]);
+    assert_eq!(
+        states(&admin).await,
+        [("ops".into(), "delivered".into(), 1, None)]
+    );
 }
 
 #[sqlx::test(migrations = "../../migrations")]
@@ -241,7 +278,13 @@ async fn permanent_failures_and_exhausted_retries_park_the_event_as_dead(admin: 
 
     let rows = states(&admin).await;
     assert_eq!((rows[0].0.as_str(), rows[0].1.as_str()), ("flaky", "dead"));
-    assert!(rows[0].3.as_deref().unwrap().contains("gave up after 2 attempts: HTTP 503"));
+    assert!(
+        rows[0]
+            .3
+            .as_deref()
+            .unwrap()
+            .contains("gave up after 2 attempts: HTTP 503")
+    );
     assert_eq!((rows[1].0.as_str(), rows[1].1.as_str()), ("gone", "dead"));
     assert!(rows[1].3.as_deref().unwrap().contains("HTTP 410"));
 }
@@ -254,7 +297,8 @@ async fn an_unusable_secret_is_dead_and_a_backend_outage_retries_without_sending
     subscribe(&app, org, "ops", &format!("{base}/json")).await;
 
     fan_out(&app, org, "e1", payload(1)).await;
-    let missing: Arc<dyn SecretSource> = Arc::new(Failing(SecretError::Missing("no secret".into())));
+    let missing: Arc<dyn SecretSource> =
+        Arc::new(Failing(SecretError::Missing("no secret".into())));
     assert_eq!(worker(&app, missing, 5).tick().await.unwrap().dead, 1);
 
     fan_out(&app, org, "e2", payload(2)).await;
@@ -276,8 +320,14 @@ async fn a_stuck_receiver_does_not_hold_up_another_in_the_same_batch(admin: PgPo
     let r = worker(&app, secrets(), 5).tick().await.unwrap();
     assert_eq!((r.claimed, r.delivered, r.retried), (2, 1, 1));
     let rows = states(&admin).await;
-    assert_eq!((rows[0].0.as_str(), rows[0].1.as_str()), ("fast", "delivered"));
-    assert_eq!((rows[1].0.as_str(), rows[1].1.as_str()), ("stuck", "queued"));
+    assert_eq!(
+        (rows[0].0.as_str(), rows[0].1.as_str()),
+        ("fast", "delivered")
+    );
+    assert_eq!(
+        (rows[1].0.as_str(), rows[1].1.as_str()),
+        ("stuck", "queued")
+    );
     assert!(rows[1].3.as_deref().unwrap().contains("request failed"));
 }
 

@@ -62,7 +62,9 @@ pub fn valid_reference(reference: &str) -> bool {
     !reference.is_empty()
         && reference.len() <= 256
         && reference.split('/').all(|s| {
-            !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            !s.is_empty()
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
         })
 }
 
@@ -102,7 +104,11 @@ pub struct CachedSecrets<S> {
 
 impl<S: SecretSource> CachedSecrets<S> {
     pub fn new(inner: S, ttl: Duration) -> Self {
-        Self { inner, ttl, cache: Mutex::new(HashMap::new()) }
+        Self {
+            inner,
+            ttl,
+            cache: Mutex::new(HashMap::new()),
+        }
     }
 
     fn hit(&self, reference: &str) -> Option<SecretBytes> {
@@ -148,7 +154,18 @@ mod tests {
         for ok in ["a", "kuki/webhooks/acme/draft_po", "a-b/c_d/E9"] {
             assert!(valid_reference(ok), "{ok}");
         }
-        for bad in ["", "/a", "a/", "a//b", "../x", "a/../b", "a b", "a.b", "a\\b", &"a".repeat(257)] {
+        for bad in [
+            "",
+            "/a",
+            "a/",
+            "a//b",
+            "../x",
+            "a/../b",
+            "a b",
+            "a.b",
+            "a\\b",
+            &"a".repeat(257),
+        ] {
             assert!(!valid_reference(bad), "{bad:?}");
         }
     }
@@ -164,13 +181,19 @@ mod tests {
     async fn the_static_source_finds_or_reports_missing() {
         let src = StaticSecrets::new().with("a/b", b"v");
         assert_eq!(src.read("a/b").await.unwrap().expose(), b"v");
-        assert!(matches!(src.read("a/c").await, Err(SecretError::Missing(_))));
+        assert!(matches!(
+            src.read("a/c").await,
+            Err(SecretError::Missing(_))
+        ));
     }
 
     struct Counting(Arc<AtomicUsize>);
 
     impl SecretSource for Counting {
-        fn read<'a>(&'a self, reference: &'a str) -> BoxFuture<'a, Result<SecretBytes, SecretError>> {
+        fn read<'a>(
+            &'a self,
+            reference: &'a str,
+        ) -> BoxFuture<'a, Result<SecretBytes, SecretError>> {
             self.0.fetch_add(1, Ordering::SeqCst);
             let out = if reference == "bad" {
                 Err(SecretError::Unavailable)

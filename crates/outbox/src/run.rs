@@ -3,10 +3,10 @@ use std::sync::Arc;
 use kuki_store::outbox::KNOWN_TOPICS;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 
+use crate::consume::{ConsumerConfig, FanoutConsumer};
 use crate::error::RelayError;
 use crate::kafka::{KafkaConfig, KafkaPublisher, ensure_topics};
 use crate::relay::{Relay, RelayConfig};
-use crate::consume::{ConsumerConfig, FanoutConsumer};
 
 /// `NAME`, or the contents of the file named by `NAME_FILE` (Docker and Kubernetes secrets).
 fn secret(name: &str) -> Result<String, RelayError> {

@@ -12,8 +12,7 @@ use kuki_actions::valid_reference;
 use kuki_api::{ApiConfig, connect_app_pool};
 use kuki_store::{
     session::{OrgSession, with_org_tx},
-    webhook_endpoints as we,
-    webhook_subscriptions as ws,
+    webhook_endpoints as we, webhook_subscriptions as ws,
 };
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use uuid::Uuid;
@@ -95,7 +94,14 @@ pub enum WebhooksCmd {
 
 pub async fn run(cmd: WebhooksCmd) -> Res {
     match cmd {
-        WebhooksCmd::Set { org, action_type, url, secret_ref, disabled, allow_http } => {
+        WebhooksCmd::Set {
+            org,
+            action_type,
+            url,
+            secret_ref,
+            disabled,
+            allow_http,
+        } => {
             validate(&action_type, &url, &secret_ref, allow_http)?;
             let (org_id, pool) = connect(&org).await?;
             let (at, u, sr) = (action_type.clone(), url.clone(), secret_ref.clone());
@@ -135,9 +141,24 @@ pub async fn run(cmd: WebhooksCmd) -> Res {
                 async move { we::remove(c, org_id, &at).await }.boxed()
             })
             .await?;
-            println!("{}", if removed { "removed" } else { "no such endpoint" });
+            println!(
+                "{}",
+                if removed {
+                    "removed"
+                } else {
+                    "no such endpoint"
+                }
+            );
         }
-        WebhooksCmd::Subscribe { org, name, url, secret_ref, mut events, disabled, allow_http } => {
+        WebhooksCmd::Subscribe {
+            org,
+            name,
+            url,
+            secret_ref,
+            mut events,
+            disabled,
+            allow_http,
+        } => {
             if events.is_empty() {
                 events.push(ws::STATUS_CHANGED.to_string());
             }
@@ -145,7 +166,12 @@ pub async fn run(cmd: WebhooksCmd) -> Res {
             events.dedup();
             validate_subscription(&name, &url, &secret_ref, &events, allow_http)?;
             let (org_id, pool) = connect(&org).await?;
-            let (n, u, sr, ev) = (name.clone(), url.clone(), secret_ref.clone(), events.clone());
+            let (n, u, sr, ev) = (
+                name.clone(),
+                url.clone(),
+                secret_ref.clone(),
+                events.clone(),
+            );
             let s = with_org_tx::<_, sqlx::Error, _>(&pool, &session(org_id), move |c| {
                 async move { ws::upsert(c, org_id, &n, &u, &sr, &ev, !disabled).await }.boxed()
             })
@@ -160,7 +186,14 @@ pub async fn run(cmd: WebhooksCmd) -> Res {
                 async move { ws::remove(c, org_id, &n).await }.boxed()
             })
             .await?;
-            println!("{}", if removed { "removed" } else { "no such subscription" });
+            println!(
+                "{}",
+                if removed {
+                    "removed"
+                } else {
+                    "no such subscription"
+                }
+            );
         }
         WebhooksCmd::Subscriptions { org } => {
             let (org_id, pool) = connect(&org).await?;
@@ -178,7 +211,10 @@ pub async fn run(cmd: WebhooksCmd) -> Res {
 }
 
 fn session(org_id: Uuid) -> OrgSession {
-    OrgSession { org_id, scope_path: None }
+    OrgSession {
+        org_id,
+        scope_path: None,
+    }
 }
 
 /// Resolve the organisation with the owner connection (as `evaluate once` does), then
@@ -186,7 +222,10 @@ fn session(org_id: Uuid) -> OrgSession {
 async fn connect(org: &str) -> Result<(Uuid, PgPool), Box<dyn Error>> {
     let owner = ApiConfig::read_setting("KUKI_MIGRATE_DATABASE_URL")?
         .ok_or("missing required setting KUKI_MIGRATE_DATABASE_URL")?;
-    let owner_pool = PgPoolOptions::new().max_connections(1).connect(&owner).await?;
+    let owner_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&owner)
+        .await?;
     let id: Option<Uuid> =
         sqlx::query_scalar("SELECT id FROM organisations WHERE slug = $1 OR id::text = $1")
             .bind(org)
@@ -217,14 +256,23 @@ fn validate_target(url: &str, secret_ref: &str, allow_http: bool) -> Result<(), 
     }
     if !valid_reference(secret_ref) {
         return Err(
-            "secret reference must be an OpenBao KV path such as kuki/webhooks/acme/draft_po".into(),
+            "secret reference must be an OpenBao KV path such as kuki/webhooks/acme/draft_po"
+                .into(),
         );
     }
     Ok(())
 }
 
-fn validate(action_type: &str, url: &str, secret_ref: &str, allow_http: bool) -> Result<(), String> {
-    if action_type.is_empty() || action_type.len() > 128 || action_type.chars().any(char::is_whitespace) {
+fn validate(
+    action_type: &str,
+    url: &str,
+    secret_ref: &str,
+    allow_http: bool,
+) -> Result<(), String> {
+    if action_type.is_empty()
+        || action_type.len() > 128
+        || action_type.chars().any(char::is_whitespace)
+    {
         return Err("action type must be 1-128 characters with no whitespace".into());
     }
     validate_target(url, secret_ref, allow_http)
@@ -248,8 +296,14 @@ fn validate_subscription(
                 .into(),
         );
     }
-    if let Some(bad) = events.iter().find(|e| !ws::EVENT_TYPES.contains(&e.as_str())) {
-        return Err(format!("unknown event type {bad:?}; expected one of {}", ws::EVENT_TYPES.join(", ")));
+    if let Some(bad) = events
+        .iter()
+        .find(|e| !ws::EVENT_TYPES.contains(&e.as_str()))
+    {
+        return Err(format!(
+            "unknown event type {bad:?}; expected one of {}",
+            ws::EVENT_TYPES.join(", ")
+        ));
     }
     validate_target(url, secret_ref, allow_http)
 }
@@ -261,13 +315,43 @@ mod tests {
     #[test]
     fn registrations_are_validated_before_touching_the_database() {
         let ok = |a, u, s, h| validate(a, u, s, h).is_ok();
-        assert!(ok("draft_po", "https://example.org/h", "kuki/webhooks/a/b", false));
-        assert!(ok("draft_po", "http://localhost:9/h", "kuki/webhooks/a/b", true));
-        assert!(!ok("draft_po", "http://localhost:9/h", "kuki/webhooks/a/b", false));
-        assert!(!ok("draft_po", "ftp://example.org/h", "kuki/webhooks/a/b", true));
-        assert!(!ok("draft_po", "https://exa mple.org", "kuki/webhooks/a/b", false));
+        assert!(ok(
+            "draft_po",
+            "https://example.org/h",
+            "kuki/webhooks/a/b",
+            false
+        ));
+        assert!(ok(
+            "draft_po",
+            "http://localhost:9/h",
+            "kuki/webhooks/a/b",
+            true
+        ));
+        assert!(!ok(
+            "draft_po",
+            "http://localhost:9/h",
+            "kuki/webhooks/a/b",
+            false
+        ));
+        assert!(!ok(
+            "draft_po",
+            "ftp://example.org/h",
+            "kuki/webhooks/a/b",
+            true
+        ));
+        assert!(!ok(
+            "draft_po",
+            "https://exa mple.org",
+            "kuki/webhooks/a/b",
+            false
+        ));
         assert!(!ok("", "https://example.org/h", "kuki/webhooks/a/b", false));
-        assert!(!ok("has space", "https://example.org/h", "kuki/webhooks/a/b", false));
+        assert!(!ok(
+            "has space",
+            "https://example.org/h",
+            "kuki/webhooks/a/b",
+            false
+        ));
         assert!(!ok("draft_po", "https://example.org/h", "../x", false));
         assert!(!ok("draft_po", "https://example.org/h", "", false));
     }
@@ -286,7 +370,15 @@ mod tests {
         for bad in ["", "Ops", "-ops", "has space", &long_string] {
             assert!(!ok(bad, "https://example.org/h", &good, false), "{bad:?}");
         }
-        assert!(!ok("ops", "https://example.org/h", &["recommendation.deleted"], false));
-        assert!(!validate_subscription("ops", "https://example.org/h", "../x", &ev(&good), false).is_ok());
+        assert!(!ok(
+            "ops",
+            "https://example.org/h",
+            &["recommendation.deleted"],
+            false
+        ));
+        assert!(
+            !validate_subscription("ops", "https://example.org/h", "../x", &ev(&good), false)
+                .is_ok()
+        );
     }
 }

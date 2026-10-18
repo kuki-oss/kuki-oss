@@ -26,12 +26,14 @@ async fn app_pool(admin: &PgPool) -> PgPool {
 
 async fn seed_org(admin: &PgPool, slug: &str) -> Uuid {
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO organisations (id, slug, name, config) VALUES ($1, $2, $2, '{}'::jsonb)")
-        .bind(id)
-        .bind(slug)
-        .execute(admin)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO organisations (id, slug, name, config) VALUES ($1, $2, $2, '{}'::jsonb)",
+    )
+    .bind(id)
+    .bind(slug)
+    .execute(admin)
+    .await
+    .unwrap();
     id
 }
 
@@ -40,9 +42,17 @@ async fn subscribe(app: &PgPool, org: Uuid, name: &str, event_types: &[&str]) {
     let types: Vec<String> = event_types.iter().map(|s| s.to_string()).collect();
     with_org_tx::<_, sqlx::Error, _>(
         app,
-        &OrgSession { org_id: org, scope_path: None },
+        &OrgSession {
+            org_id: org,
+            scope_path: None,
+        },
         move |c| {
-            async move { ws::upsert(c, org, &name, URL, REF, &types, true).await.map(|_| ()) }.boxed()
+            async move {
+                ws::upsert(c, org, &name, URL, REF, &types, true)
+                    .await
+                    .map(|_| ())
+            }
+            .boxed()
         },
     )
     .await
@@ -61,7 +71,9 @@ async fn queued(admin: &PgPool) -> Vec<(Uuid, String)> {
 }
 
 #[sqlx::test(migrations = "../../migrations")]
-async fn an_event_is_queued_once_per_matching_subscription_and_a_replay_adds_nothing(admin: PgPool) {
+async fn an_event_is_queued_once_per_matching_subscription_and_a_replay_adds_nothing(
+    admin: PgPool,
+) {
     let a = seed_org(&admin, "a").await;
     let b = seed_org(&admin, "b").await;
     let app = app_pool(&admin).await;
@@ -79,11 +91,20 @@ async fn an_event_is_queued_once_per_matching_subscription_and_a_replay_adds_not
         }
     }
     // SAFETY of borrows: `event` is only called while `payload` is alive.
-    assert_eq!(fanout.handle(&make_event(&a_str, &payload)).await.unwrap(), Handled::Queued(2));
+    assert_eq!(
+        fanout.handle(&make_event(&a_str, &payload)).await.unwrap(),
+        Handled::Queued(2)
+    );
     // Kafka redelivers the message: nothing more is queued.
-    assert_eq!(fanout.handle(&make_event(&a_str, &payload)).await.unwrap(), Handled::Queued(0));
+    assert_eq!(
+        fanout.handle(&make_event(&a_str, &payload)).await.unwrap(),
+        Handled::Queued(0)
+    );
     // The same outbox id for an organisation without subscriptions queues nothing.
-    assert_eq!(fanout.handle(&make_event(&b_str, &payload)).await.unwrap(), Handled::Queued(0));
+    assert_eq!(
+        fanout.handle(&make_event(&b_str, &payload)).await.unwrap(),
+        Handled::Queued(0)
+    );
 
     let rows = queued(&admin).await;
     assert_eq!(rows.len(), 2);
@@ -97,7 +118,11 @@ async fn an_event_type_nobody_subscribed_to_queues_nothing(admin: PgPool) {
     subscribe(&app, org, "ops", &[CHANGED]).await;
     let org_str = org.to_string();
     let payload = body("recommendation.created", 1);
-    let m = Incoming { outbox_id: Some("1"), organisation_id: Some(&org_str), payload: Some(&payload) };
+    let m = Incoming {
+        outbox_id: Some("1"),
+        organisation_id: Some(&org_str),
+        payload: Some(&payload),
+    };
 
     let handled = Fanout::new(app).handle(&m).await.unwrap();
     assert_eq!(handled, Handled::Queued(0));
@@ -116,11 +141,31 @@ async fn unusable_messages_are_skipped_without_failing_or_queueing(admin: PgPool
     let junk = serde_json::to_vec(&junk).unwrap();
 
     let cases = [
-        Incoming { outbox_id: None, organisation_id: Some(&org_str), payload: Some(&good) },
-        Incoming { outbox_id: Some("1"), organisation_id: None, payload: Some(&good) },
-        Incoming { outbox_id: Some("1"), organisation_id: Some("nope"), payload: Some(&good) },
-        Incoming { outbox_id: Some("1"), organisation_id: Some(&org_str), payload: None },
-        Incoming { outbox_id: Some("1"), organisation_id: Some(&org_str), payload: Some(&junk) },
+        Incoming {
+            outbox_id: None,
+            organisation_id: Some(&org_str),
+            payload: Some(&good),
+        },
+        Incoming {
+            outbox_id: Some("1"),
+            organisation_id: None,
+            payload: Some(&good),
+        },
+        Incoming {
+            outbox_id: Some("1"),
+            organisation_id: Some("nope"),
+            payload: Some(&good),
+        },
+        Incoming {
+            outbox_id: Some("1"),
+            organisation_id: Some(&org_str),
+            payload: None,
+        },
+        Incoming {
+            outbox_id: Some("1"),
+            organisation_id: Some(&org_str),
+            payload: Some(&junk),
+        },
     ];
     for m in cases {
         let handled = fanout.handle(&m).await.unwrap();
@@ -128,7 +173,11 @@ async fn unusable_messages_are_skipped_without_failing_or_queueing(admin: PgPool
     }
     assert!(matches!(
         fanout
-            .handle(&Incoming { outbox_id: None, organisation_id: Some(&org_str), payload: Some(&good) })
+            .handle(&Incoming {
+                outbox_id: None,
+                organisation_id: Some(&org_str),
+                payload: Some(&good)
+            })
             .await
             .unwrap(),
         Handled::Skipped(Skip::MissingHeader("kuki-outbox-id"))

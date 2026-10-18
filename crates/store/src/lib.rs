@@ -15,8 +15,8 @@ pub mod recommendation_reads;
 pub mod recommendations;
 pub mod session;
 pub mod tenant;
-pub mod webhook_endpoints;
 pub mod webhook_deliveries;
+pub mod webhook_endpoints;
 pub mod webhook_subscriptions;
 
 /// Migrations are embedded at compile time, used by `kuki serve` on boot and by tests

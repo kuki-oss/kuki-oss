@@ -82,7 +82,9 @@ async fn run(
 ) {
     let (mut tx, rx) = socket.split();
     let input = rx
-        .take_while(|m| std::future::ready(matches!(m, Ok(msg) if !matches!(msg, Message::Close(_)))))
+        .take_while(|m| {
+            std::future::ready(matches!(m, Ok(msg) if !matches!(msg, Message::Close(_))))
+        })
         .filter_map(|m| {
             std::future::ready(match m {
                 Ok(Message::Text(t)) => Some(t.as_str().to_owned()),
@@ -97,9 +99,13 @@ async fn run(
     while let Some(out) = gql.next().await {
         let (frame, last) = match out {
             WsMessage::Text(t) => (Message::Text(t.into()), false),
-            WsMessage::Close(code, reason) => {
-                (Message::Close(Some(CloseFrame { code, reason: reason.into() })), true)
-            }
+            WsMessage::Close(code, reason) => (
+                Message::Close(Some(CloseFrame {
+                    code,
+                    reason: reason.into(),
+                })),
+                true,
+            ),
         };
         if tx.send(frame).await.is_err() || last {
             break;

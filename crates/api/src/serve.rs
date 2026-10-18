@@ -1,13 +1,13 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::http::header;
-use sqlx::postgres::PgPoolOptions;
-use sqlx::PgPool;
-use thiserror::Error;
-use tower_http::sensitive_headers::SetSensitiveRequestHeadersLayer;
 use kuki_outbox::{EventFeed, KafkaConfig};
 use kuki_store::outbox::{KNOWN_TOPICS, TOPIC_RECOMMENDATIONS};
+use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
+use thiserror::Error;
 use tokio::{sync::watch, task::JoinHandle};
+use tower_http::sensitive_headers::SetSensitiveRequestHeadersLayer;
 
 use crate::bao::{BaoClient, BaoHasher, BaoReadiness};
 use crate::config::ApiConfig;
@@ -89,7 +89,9 @@ async fn start_live_feed() -> Result<Option<LiveFeed>, ServeError> {
     }
     let cfg = |e: kuki_outbox::RelayError| ServeError::Config(e.to_string());
     let kafka = KafkaConfig::from_env().map_err(cfg)?;
-    kuki_outbox::ensure_topics(&kafka, KNOWN_TOPICS).await.map_err(cfg)?;
+    kuki_outbox::ensure_topics(&kafka, KNOWN_TOPICS)
+        .await
+        .map_err(cfg)?;
     let (stop, stopped) = watch::channel(false);
     let (feed, task) =
         EventFeed::start(&kafka, TOPIC_RECOMMENDATIONS, 1024, stopped).map_err(cfg)?;
