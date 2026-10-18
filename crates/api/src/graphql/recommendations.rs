@@ -421,7 +421,7 @@ fn internal(e: serde_json::Error) -> Error {
     Error::from(ApiError::internal(e))
 }
 
-fn stored<T: serde::de::DeserializeOwned>(s: &str) -> Result<T> {
+pub(super) fn stored<T: serde::de::DeserializeOwned>(s: &str) -> Result<T> {
     serde_json::from_value(JsonValue::String(s.to_owned())).map_err(internal)
 }
 

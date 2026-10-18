@@ -34,7 +34,8 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/graphql",
             axum::routing::post(crate::graphql::post_graphql)
-                .layer(axum::extract::DefaultBodyLimit::max(64 * 1024)),
+                .layer(axum::extract::DefaultBodyLimit::max(64 * 1024))
+                .get(crate::graphql::upgrade_ws),
         )
         .layer(axum::extract::DefaultBodyLimit::disable())
         .layer(axum::middleware::from_fn(crate::ratelimit::report))

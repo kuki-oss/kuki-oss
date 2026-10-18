@@ -11,11 +11,15 @@ mod query;
 mod recommendations;
 mod registry;
 mod resolve;
+mod subscription;
+mod ws;
 pub use resolve::MutationRoot;
+pub use subscription::SubscriptionRoot;
+pub use ws::upgrade as upgrade_ws;
 
 use std::sync::OnceLock;
 
-use async_graphql::{EmptySubscription, Request, Response, Schema};
+use async_graphql::{Request, Response, Schema};
 use axum::Json;
 use axum::extract::State;
 use axum::extract::rejection::JsonRejection;
@@ -26,7 +30,7 @@ use crate::state::AppState;
 
 pub use query::QueryRoot;
 
-pub type AppSchema = Schema<QueryRoot, MutationRoot, EmptySubscription>;
+pub type AppSchema = Schema<QueryRoot, MutationRoot, SubscriptionRoot>;
 
 /// Query limits. Placeholders until connection fields exist; page-size aware
 /// complexity comes with `orgUnits`.
@@ -44,7 +48,7 @@ impl Limits {
 }
 
 pub fn build(limits: Limits) -> AppSchema {
-    Schema::build(QueryRoot::default(), MutationRoot, EmptySubscription)
+    Schema::build(QueryRoot::default(), MutationRoot, SubscriptionRoot)
         .limit_depth(limits.depth)
         .limit_complexity(limits.complexity)
         // Not referenced by any field; registered so SDKs see them (contract).

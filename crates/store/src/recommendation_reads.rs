@@ -170,6 +170,23 @@ pub async fn changes(
     qb.build_query_as::<RecommendationRow>().fetch_all(c).await
 }
 
+/// One recommendation if the caller can see it and it passes `visible`. Used
+/// to deliver a live event: the event says what changed, this says whether this
+/// caller may be told.
+pub async fn get_visible(
+    c: &mut PgConnection,
+    org: Uuid,
+    id: Uuid,
+    visible: &Visible<'_>,
+) -> Result<Option<RecommendationRow>, sqlx::Error> {
+    let mut qb = QueryBuilder::new(format!(
+        "SELECT {COLS} FROM recommendations WHERE organisation_id = "
+    ));
+    qb.push_bind(org).push(" AND id = ").push_bind(id);
+    push_visible(&mut qb, visible);
+    qb.build_query_as::<RecommendationRow>().fetch_optional(c).await
+}
+
 #[derive(Debug, sqlx::FromRow)]
 pub struct TypeCounts {
     pub decision_type: String,

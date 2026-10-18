@@ -5,6 +5,9 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use thiserror::Error;
 use tower_http::sensitive_headers::SetSensitiveRequestHeadersLayer;
+use kuki_outbox::{EventFeed, KafkaConfig};
+use kuki_store::outbox::{KNOWN_TOPICS, TOPIC_RECOMMENDATIONS};
+use tokio::{sync::watch, task::JoinHandle};
 
 use crate::bao::{BaoClient, BaoHasher, BaoReadiness};
 use crate::config::ApiConfig;
@@ -72,10 +75,33 @@ pub async fn build_state(config: ApiConfig) -> Result<AppState, ServeError> {
     })
 }
 
+struct LiveFeed {
+    feed: EventFeed,
+    stop: watch::Sender<bool>,
+    task: JoinHandle<()>,
+}
+
+/// Live recommendation events for GraphQL subscriptions. Off unless KUKI_KAFKA_BROKERS is set.
+async fn start_live_feed() -> Result<Option<LiveFeed>, ServeError> {
+    if std::env::var_os("KUKI_KAFKA_BROKERS").is_none() {
+        tracing::warn!("KUKI_KAFKA_BROKERS is not set: GraphQL subscriptions are disabled");
+        return Ok(None);
+    }
+    let cfg = |e: kuki_outbox::RelayError| ServeError::Config(e.to_string());
+    let kafka = KafkaConfig::from_env().map_err(cfg)?;
+    kuki_outbox::ensure_topics(&kafka, KNOWN_TOPICS).await.map_err(cfg)?;
+    let (stop, stopped) = watch::channel(false);
+    let (feed, task) =
+        EventFeed::start(&kafka, TOPIC_RECOMMENDATIONS, 1024, stopped).map_err(cfg)?;
+    tracing::info!(brokers = %kafka.brokers, "live recommendation feed started");
+    Ok(Some(LiveFeed { feed, stop, task }))
+}
+
 pub async fn serve(config: ApiConfig) -> Result<(), ServeError> {
     let bind = config.bind;
     let limits = RateLimitConfig::from_env().map_err(ServeError::Config)?;
     let state = build_state(config).await?;
+    let live = start_live_feed().await?;
 
     let mut app = router(state);
     match limits.limiter() {
@@ -89,6 +115,9 @@ pub async fn serve(config: ApiConfig) -> Result<(), ServeError> {
         }
         None => tracing::warn!("per-key rate limiting is disabled (KUKI_RATE_LIMIT_BURST=0)"),
     }
+    if let Some(l) = &live {
+        app = app.layer(axum::Extension(l.feed.clone()));
+    }
     let app = app.layer(SetSensitiveRequestHeadersLayer::new([
         header::AUTHORIZATION,
     ]));
@@ -101,6 +130,10 @@ pub async fn serve(config: ApiConfig) -> Result<(), ServeError> {
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+    if let Some(l) = live {
+        let _ = l.stop.send(true);
+        let _ = l.task.await;
+    }
     Ok(())
 }
 

@@ -611,7 +611,9 @@ type RecommendationStatusChange {
 
 """
 graphql-ws. Authenticate in the `connection_init` payload, never by cookie (spec 3.4).
-Delivery is at-least-once (outbox): consumers dedupe on (recommendation id, version).
+Delivery to a connected client is at-most-once: a live subscription cannot replay, and a socket
+that falls behind skips events. Reconnecting clients catch up with `recommendationChanges`.
+Consumers dedupe on (recommendation id, version). Webhooks are the at-least-once channel.
 Event names are PROPOSED, derived from outbox topics (recommendation.created / .updated).
 """
 type Subscription {

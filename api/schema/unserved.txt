@@ -1,5 +1,2 @@
 # Contract root fields not yet served. Delete a line when the field ships.
 # The graphql_contract test fails if this list and reality disagree.
-Subscription.recommendationCreated
-Subscription.recommendationUpdated
-Subscription.recommendationStatusChanged
