@@ -38,6 +38,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
+    builtin::default_action,
     config::{ConfigError, load_config},
     registry::Registry,
     view::PgOntologyView,
@@ -171,6 +172,7 @@ pub(crate) fn check(
 /// Builds the store row. The body holds only what is stable between runs; ids,
 /// clocks and the provenance live in their own columns, so an unchanged candidate
 /// is a silent re-confirmation.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn assemble(
     g: &dyn DecisionGenerator,
     p: &Proposal,
@@ -179,11 +181,12 @@ pub(crate) fn assemble(
     ontology_version: i32,
     now: DateTime<Utc>,
     ttl: Duration,
+    action_type: Option<&str>,
 ) -> NewRecommendation {
     let c = &p.candidate;
     let action = Action {
         proposed: true,
-        action_type: None,
+        action_type: action_type.map(str::to_owned),
         payload: c.payload.clone(),
         payload_schema_ref: info.payload_schema_ref.clone(),
     };
@@ -382,6 +385,7 @@ impl Evaluator {
                 self.opts.ontology_version,
                 now,
                 self.opts.ttl,
+                default_action(g.decision_type()),
             ));
         }
 
@@ -571,7 +575,16 @@ mod tests {
         let cfg = OrgDecisionConfig::default();
         let p = proposal(|_, _| {});
         let t0 = Utc.with_ymd_and_hms(2026, 10, 11, 12, 0, 0).unwrap();
-        let a = assemble(&DeadlineAtRisk, &p, &info, &cfg, 1, t0, Duration::days(7));
+        let a = assemble(
+            &DeadlineAtRisk,
+            &p,
+            &info,
+            &cfg,
+            1,
+            t0,
+            Duration::days(7),
+            None,
+        );
         let b = assemble(
             &DeadlineAtRisk,
             &p,
@@ -580,6 +593,7 @@ mod tests {
             1,
             t0 + Duration::minutes(5),
             Duration::days(7),
+            None,
         );
         assert_eq!(a.body, b.body, "the store would revise on every run");
         assert_eq!(
@@ -588,6 +602,41 @@ mod tests {
         );
         assert_ne!(a.expires_at, b.expires_at);
         assert_ne!(a.provenance, b.provenance, "provenance records the clock");
+    }
+
+    #[test]
+    fn the_decision_types_action_is_carried_into_the_body() {
+        let info = DecisionTypeInfo {
+            pack: "p".into(),
+            payload_schema_ref: "p/t.d.json".into(),
+            payload_schema: json!({}),
+        };
+        let cfg = OrgDecisionConfig::default();
+        let p = proposal(|_, _| {});
+        let t0 = Utc.with_ymd_and_hms(2026, 10, 11, 12, 0, 0).unwrap();
+        let with = assemble(
+            &DeadlineAtRisk,
+            &p,
+            &info,
+            &cfg,
+            1,
+            t0,
+            Duration::days(7),
+            Some("builtin:flag_review"),
+        );
+        assert_eq!(with.body["action"]["action_type"], "builtin:flag_review");
+        assert_eq!(with.body["action"]["proposed"], true);
+        let without = assemble(
+            &DeadlineAtRisk,
+            &p,
+            &info,
+            &cfg,
+            1,
+            t0,
+            Duration::days(7),
+            None,
+        );
+        assert!(without.body["action"]["action_type"].is_null());
     }
 
     #[test]

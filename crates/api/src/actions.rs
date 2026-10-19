@@ -1,7 +1,8 @@
 //! `kuki actions run`: the action executor service.
 //!
-//! Claims queued action executions, routes each to the organisation's registered
-//! webhook endpoint, and settles the execution and its recommendation.
+//! Claims queued action executions. `builtin:` actions run inside Kuki; any other action goes
+//! to the organisation's registered webhook endpoint. Each execution and its recommendation
+//! are then settled together.
 //!
 //! Settings (each also accepts `NAME_FILE`):
 //!   KUKI_DATABASE_URL, KUKI_BAO_ADDR, KUKI_BAO_TOKEN   as for the API
@@ -13,8 +14,8 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use kuki_actions::{
-    CachedSecrets, Config as ExecutorConfig, DeliveryConfig, DeliveryWorker, Executor,
-    RegistryRouter, SecretSource, WebhookConfig, valid_reference,
+    BuiltinRouter, CachedSecrets, Config as ExecutorConfig, DeliveryConfig, DeliveryWorker,
+    Executor, RegistryRouter, SecretSource, WebhookConfig, valid_reference,
 };
 use tokio::sync::watch;
 
@@ -119,8 +120,11 @@ pub async fn run_actions(api: ApiConfig) -> Result<(), ServeError> {
 
     let kv = BaoKv::new(bao, cfg.kv_mount.clone()).map_err(ServeError::Config)?;
     let secrets: Arc<dyn SecretSource> = Arc::new(CachedSecrets::new(kv, cfg.secret_ttl));
-    let router = RegistryRouter::new(pool.clone(), secrets.clone(), &cfg.webhook)
+    // `builtin:` actions run inside Kuki; every other type goes to the organisation's
+    // registered webhook endpoint.
+    let webhooks = RegistryRouter::new(pool.clone(), secrets.clone(), &cfg.webhook)
         .map_err(ServeError::Config)?;
+    let router = BuiltinRouter::new(Arc::new(webhooks));
     let executor = Executor::new(pool.clone(), Arc::new(router), ExecutorConfig::default())
         .map_err(ServeError::Config)?;
     let deliveries = DeliveryWorker::new(pool, secrets, &cfg.webhook, DeliveryConfig::default())

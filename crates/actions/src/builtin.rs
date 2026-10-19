@@ -186,4 +186,10 @@ mod tests {
                 .is_none()
         );
     }
+
+    #[test]
+    fn the_flag_review_name_is_the_one_the_engine_assigns() {
+        // kuki_engine::builtin::default_action("work.escalate") returns this literal.
+        assert_eq!(FLAG_REVIEW, "builtin:flag_review");
+    }
 }
