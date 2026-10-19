@@ -6,6 +6,7 @@
 //! [`Job::id`]. Several executors may run side by side: claims never overlap.
 
 mod adapter;
+mod builtin;
 mod deliveries;
 mod executor;
 mod registry;
@@ -13,6 +14,7 @@ pub mod secrets;
 mod webhook;
 
 pub use adapter::{Adapter, Job, Outcome, Router, StaticRouter};
+pub use builtin::{BuiltinRouter, FLAG_REVIEW, FlagReview, PREFIX as BUILTIN_PREFIX};
 pub use deliveries::{DeliveryConfig, DeliveryReport, DeliveryWorker};
 pub use executor::{ACTOR, Config, Executor, Report};
 pub use registry::RegistryRouter;
