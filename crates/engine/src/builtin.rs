@@ -1,24 +1,16 @@
 //! Decision types that ship with the engine. They are installed per organisation by
 //! an operator (privileged connection); `kuki_app` cannot write the registry.
 
-use kuki_store::engine_reads::register_decision_type;
-use serde_json::{Value, json};
+use serde_json::json;
 use sqlx::PgConnection;
+use std::sync::Arc;
 use uuid::Uuid;
 
-pub const PACK: &str = "kuki.base";
+use crate::generators::deadline::DeadlineAtRisk;
+pub use crate::pack::DecisionTypeDef;
+use crate::pack::Pack;
 
-pub struct DecisionTypeDef {
-    pub name: &'static str,
-    pub pack: &'static str,
-    pub schema_ref: &'static str,
-    /// What accepting a decision of this type queues, if anything.
-    /// Constant per type, so it cannot make a candidate drift between
-    /// runs. `builtin:` names are served by `kuki_actions::BuiltinRouter`;
-    /// any other name needs a registered webhook endpoint.
-    pub default_action: Option<&'static str>,
-    pub schema: Value,
-}
+pub const PACK: &str = "kuki.base";
 
 /// `work.escalate`: the payload `deadline.at_risk.t0` produces.
 fn work_escalate() -> DecisionTypeDef {
@@ -46,12 +38,19 @@ pub fn decision_types() -> Vec<DecisionTypeDef> {
     vec![work_escalate()]
 }
 
-pub async fn install_decision_types(c: &mut PgConnection, org: Uuid) -> Result<(), sqlx::Error> {
-    for d in decision_types() {
-        register_decision_type(c, org, d.name, d.pack, d.schema_ref, &d.schema, d.default_action)
-            .await?;
+/// The pack kuki-oss ships: domain-neutral decision types and
+/// the generators that produce them.
+pub fn base_pack() -> Pack {
+    Pack {
+        name: PACK,
+        version: semver::Version::new(0, 1, 0),
+        decision_types: decision_types(),
+        generators: vec![Arc::new(DeadlineAtRisk)],
     }
-    Ok(())
+}
+
+pub async fn install_decision_types(c: &mut PgConnection, org: Uuid) -> Result<(), sqlx::Error> {
+    crate::pack::install(c, org, &decision_types()).await
 }
 
 #[cfg(test)]
@@ -108,5 +107,12 @@ mod tests {
                 d.name
             );
         }
+    }
+
+    #[test]
+    fn the_base_pack_is_consistent_and_named_by_the_constant() {
+        let p = base_pack();
+        assert_eq!(p.name, PACK);
+        assert_eq!(p.validate(), Ok(()));
     }
 }
