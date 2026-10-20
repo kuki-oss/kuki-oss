@@ -49,6 +49,8 @@ pub struct DecisionTypeInfo {
     pub pack: String,
     pub payload_schema_ref: String,
     pub payload_schema: Json,
+    /// What accepting a decision of this type queues; `None` queues nothing.
+    pub default_action_type: Option<String>,
 }
 
 pub async fn decision_type_info(
@@ -57,7 +59,7 @@ pub async fn decision_type_info(
     name: &str,
 ) -> Result<Option<DecisionTypeInfo>, sqlx::Error> {
     sqlx::query_as(
-        "SELECT pack, payload_schema_ref, payload_schema FROM decision_types
+        "SELECT pack, payload_schema_ref, payload_schema, default_action_type FROM decision_types
           WHERE organisation_id = $1 AND name = $2",
     )
     .bind(org)
@@ -66,8 +68,9 @@ pub async fn decision_type_info(
     .await
 }
 
-/// Registers or updates a decision type. Needs a priviledged connection: `kuki_app`
-/// only reads the registry.
+/// Registers or updates a decision type. The pack is the source of truth, so
+/// re-registering replaces every field, the default action included. Needs a
+/// privileged connection: `kuki_app` only reads the registry.
 pub async fn register_decision_type(
     c: &mut PgConnection,
     org: Uuid,
@@ -75,20 +78,24 @@ pub async fn register_decision_type(
     pack: &str,
     schema_ref: &str,
     schema: &Json,
+    default_action_type: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO decision_types (organisation_id, name, pack, payload_schema_ref, payload_schema)
-         VALUES ($1, $2, $3, $4, $5)
+        "INSERT INTO decision_types
+            (organisation_id, name, pack, payload_schema_ref, payload_schema, default_action_type)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (organisation_id, name) DO UPDATE
             SET pack = EXCLUDED.pack,
                 payload_schema_ref = EXCLUDED.payload_schema_ref,
-                payload_schema = EXCLUDED.payload_schema",
+                payload_schema = EXCLUDED.payload_schema,
+                default_action_type = EXCLUDED.default_action_type",
     )
     .bind(org)
     .bind(name)
     .bind(pack)
     .bind(schema_ref)
     .bind(schema)
+    .bind(default_action_type)
     .execute(c)
     .await?;
     Ok(())

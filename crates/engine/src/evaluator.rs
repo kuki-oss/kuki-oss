@@ -38,7 +38,6 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    builtin::default_action,
     config::{ConfigError, load_config},
     registry::Registry,
     view::PgOntologyView,
@@ -385,7 +384,7 @@ impl Evaluator {
                 self.opts.ontology_version,
                 now,
                 self.opts.ttl,
-                default_action(g.decision_type()),
+                info.default_action_type.as_deref(),
             ));
         }
 
@@ -571,6 +570,7 @@ mod tests {
             pack: "p".into(),
             payload_schema_ref: "p/t.d.json".into(),
             payload_schema: json!({}),
+            default_action_type: None,
         };
         let cfg = OrgDecisionConfig::default();
         let p = proposal(|_, _| {});
@@ -610,6 +610,7 @@ mod tests {
             pack: "p".into(),
             payload_schema_ref: "p/t.d.json".into(),
             payload_schema: json!({}),
+            default_action_type: Some("builtin:flag_review".into()),
         };
         let cfg = OrgDecisionConfig::default();
         let p = proposal(|_, _| {});
