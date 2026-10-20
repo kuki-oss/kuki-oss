@@ -320,11 +320,11 @@ async fn the_first_run_creates_and_announces_recommendations(admin: PgPool) {
     let row = recs::get(&mut c, org, id).await.unwrap().unwrap();
     assert_eq!(row.decision_type, "work.escalate");
     assert_eq!(row.provenance["generator_id"], "deadline.at_risk.t0");
-    assert_eq!(row.provenance["pack"], "kuki.core");
+    assert_eq!(row.provenance["pack"], "kuki.base");
     assert_eq!(row.body["action"]["proposed"], true);
     assert_eq!(
         row.body["action"]["payload_schema_ref"],
-        "kuki.core/work.escalate.json"
+        "kuki.base/work.escalate.json"
     );
     assert_eq!(row.expires_at, Some(now() + Duration::days(7)));
 }

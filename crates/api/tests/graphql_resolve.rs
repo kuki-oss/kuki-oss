@@ -17,7 +17,7 @@ fn body(n: u128) -> Value {
         "dedup_key": format!("k{n}"),
         "org_unit_id": null,
         "action": { "proposed": true, "payload": { "object_id": "o-1" },
-                    "payload_schema_ref": "kuki.core/work.escalate.json" },
+                    "payload_schema_ref": "kuki.base/work.escalate.json" },
         "rationale": { "summary": "Case overdue",
                        "factors": [{ "label": "hours overdue", "value": 5, "evidence": [] }],
                        "confidence": 0.9, "confidence_kind": "data_quality" },
@@ -30,7 +30,7 @@ fn body(n: u128) -> Value {
 fn provenance() -> Value {
     json!({
         "generator_id": "deadline.at_risk.t0", "generator_version": "1.0.0", "tier": "T0",
-        "pack": "kuki.core", "ontology_version": 1, "config_hash": "abc",
+        "pack": "kuki.base", "ontology_version": 1, "config_hash": "abc",
         "as_of": "2026-10-01T09:59:00Z", "input_digest": "sha256:def"
     })
 }
@@ -65,7 +65,7 @@ async fn put(
 async fn register_type(admin: &PgPool, org: Uuid) {
     sqlx::query(
         "INSERT INTO decision_types (organisation_id, name, pack, payload_schema_ref, payload_schema)
-         VALUES ($1, 'work.escalate', 'kuki.core', 'kuki.core/work.escalate.json', $2)",
+         VALUES ($1, 'work.escalate', 'kuki.base', 'kuki.base/work.escalate.json', $2)",
     )
     .bind(org)
     .bind(json!({

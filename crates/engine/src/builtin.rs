@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use sqlx::PgConnection;
 use uuid::Uuid;
 
-pub const PACK: &str = "kuki.core";
+pub const PACK: &str = "kuki.base";
 
 pub struct DecisionTypeDef {
     pub name: &'static str,
@@ -20,7 +20,7 @@ fn work_escalate() -> DecisionTypeDef {
     DecisionTypeDef {
         name: "work.escalate",
         pack: PACK,
-        schema_ref: "kuki.core/work.escalate.json",
+        schema_ref: "kuki.base/work.escalate.json",
         schema: json!({
             "type": "object",
             "required": ["objectId", "objectType", "dueAt", "overdue"],

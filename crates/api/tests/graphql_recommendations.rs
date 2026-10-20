@@ -90,7 +90,7 @@ fn body(r: &Rec) -> Value {
         "action": {
             "proposed": true,
             "payload": { "object_id": "o-1" },
-            "payload_schema_ref": "kuki.core/work.escalate.json"
+            "payload_schema_ref": "kuki.base/work.escalate.json"
         },
         "rationale": {
             "summary": "Case C-1 is overdue",
@@ -114,7 +114,7 @@ fn provenance() -> Value {
         "generator_id": "deadline.at_risk.t0",
         "generator_version": "1.0.0",
         "tier": "T0",
-        "pack": "kuki.core",
+        "pack": "kuki.base",
         "ontology_version": 1,
         "config_hash": "abc",
         "as_of": "2026-10-01T09:59:00Z",
@@ -263,7 +263,7 @@ async fn a_recommendation_reads_back_in_full(admin: PgPool) {
     assert!(r["action"]["actionType"].is_null());
     assert_eq!(
         r["action"]["payloadSchemaRef"],
-        "kuki.core/work.escalate.json"
+        "kuki.base/work.escalate.json"
     );
     assert_eq!(r["action"]["payload"]["__typename"], "GenericPayload");
     assert_eq!(r["action"]["payload"]["payload"]["object_id"], "o-1");
@@ -293,7 +293,7 @@ async fn a_recommendation_reads_back_in_full(admin: PgPool) {
     let p = &r["provenance"];
     assert_eq!(p["generatorId"], "deadline.at_risk.t0");
     assert_eq!(p["tier"], "T0");
-    assert_eq!(p["pack"], "kuki.core");
+    assert_eq!(p["pack"], "kuki.base");
     assert_eq!(p["ontologyVersion"], 1);
     assert_eq!(at(&p["asOf"]), t("2026-10-01T09:59:00Z"));
     assert!(p["modelArtefact"].is_null());

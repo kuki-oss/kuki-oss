@@ -45,7 +45,7 @@ async fn seed_rec(admin: &PgPool, org: Uuid, n: u128, status: &str) {
         "dedup_key": format!("k{n}"),
         "org_unit_id": null,
         "action": { "proposed": true, "action_type": TYPE, "payload": { "object_id": "o-1" },
-                    "payload_schema_ref": "kuki.core/work.escalate.json" },
+                    "payload_schema_ref": "kuki.base/work.escalate.json" },
         "rationale": { "summary": "Case overdue",
                        "factors": [{ "label": "hours overdue", "value": 5, "evidence": [] }],
                        "confidence": 0.9, "confidence_kind": "data_quality" },
@@ -53,7 +53,7 @@ async fn seed_rec(admin: &PgPool, org: Uuid, n: u128, status: &str) {
     });
     let provenance = json!({
         "generator_id": "deadline.at_risk.t0", "generator_version": "1.0.0", "tier": "T0",
-        "pack": "kuki.core", "ontology_version": 1, "config_hash": "abc",
+        "pack": "kuki.base", "ontology_version": 1, "config_hash": "abc",
         "as_of": "2026-10-01T09:59:00Z", "input_digest": "sha256:def"
     });
     sqlx::query(
