@@ -115,4 +115,16 @@ mod tests {
         assert_eq!(p.name, PACK);
         assert_eq!(p.validate(), Ok(()));
     }
+
+    #[tokio::test]
+    async fn every_generator_in_the_base_pack_meets_the_generator_contract() {
+        use std::collections::BTreeMap;
+
+        use crate::generators::deadline;
+
+        let fixtures = BTreeMap::from([(deadline::ID, deadline::fixture::fixtures())]);
+        crate::testing::check_pack(&base_pack(), &fixtures)
+            .await
+            .unwrap();
+    }
 }

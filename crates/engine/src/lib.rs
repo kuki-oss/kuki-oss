@@ -11,6 +11,9 @@ pub mod run;
 pub mod runner;
 pub mod view;
 
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
+
 pub use config::{ConfigError, load_config, parse_config};
 pub use evaluator::{
     EngineError, Evaluator, EvaluatorOptions, GeneratorReport, Rejection, RunReport,

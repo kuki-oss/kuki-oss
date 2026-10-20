@@ -257,87 +257,89 @@ impl DecisionGenerator for DeadlineAtRisk {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::Arc;
+pub(crate) mod fixture {
+    //! The deadline generator's contract fixtures and builders, shared with the pack test.
 
-    use chrono::TimeZone;
-    use kuki_extension::{
-        EventQuery, EventRecord, LinkRecord, OntologyView,
-        config::{GeneratorSettings, OrgDecisionConfig},
-    };
-    use uuid::Uuid;
+    use chrono::{DateTime, Duration, TimeZone, Utc};
+    use kuki_extension::ObjectRecord;
+    use serde_json::{Value, json};
 
-    use super::*;
+    use crate::testing::{Case, Fixtures, object};
 
-    struct FakeView(Vec<ObjectRecord>);
-
-    #[async_trait]
-    impl OntologyView for FakeView {
-        async fn object(&self, id: Uuid) -> Result<Option<ObjectRecord>, GenError> {
-            Ok(self.0.iter().find(|o| o.id == id).cloned())
-        }
-        async fn objects_of_type(
-            &self,
-            t: &str,
-            _u: Option<Uuid>,
-        ) -> Result<Vec<ObjectRecord>, GenError> {
-            Ok(self
-                .0
-                .iter()
-                .filter(|o| o.type_name == t)
-                .cloned()
-                .collect())
-        }
-        async fn links(&self, _o: Uuid, _t: Option<&str>) -> Result<Vec<LinkRecord>, GenError> {
-            Ok(vec![])
-        }
-        async fn events(&self, _q: &EventQuery) -> Result<Vec<EventRecord>, GenError> {
-            Ok(vec![])
-        }
-    }
-
-    fn clock() -> DateTime<Utc> {
+    pub fn clock() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 10, 11, 12, 0, 0).unwrap()
     }
 
-    fn case(id: u128, due: Option<DateTime<Utc>>, status: &str) -> ObjectRecord {
+    pub fn case(id: u128, due: Option<DateTime<Utc>>, status: &str) -> ObjectRecord {
         let mut attrs = json!({ "status": status });
         if let Some(d) = due {
             attrs["due_at"] = json!(d.to_rfc3339());
         }
-        ObjectRecord {
-            id: Uuid::from_u128(id),
-            type_name: "case".into(),
-            type_version: 1,
-            org_unit_id: None,
-            external_ids: json!({}),
-            attrs,
-            valid_from: Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap(),
-            valid_to: None,
-        }
+        object(id, "case", attrs)
     }
 
-    fn params() -> Value {
+    pub fn params() -> Value {
         json!({ "object_type": "case", "status_attr": "status",
                 "open_statuses": ["open", "in_progress"], "horizon_hours": 72 })
     }
 
+    pub fn fixtures() -> Fixtures {
+        let h = Duration::hours;
+        let mut unreadable = case(6, None, "open");
+        unreadable.attrs["due_at"] = json!("next tuesday");
+        Fixtures {
+            cases: vec![
+                // 36 h and 6 h sit mid-step of the 0.05 urgency quantisation, so a minute of
+                // clock movement cannot cross a boundary.
+                Case {
+                    name: "overdue and approaching",
+                    as_of: clock(),
+                    params: params(),
+                    objects: vec![
+                        case(1, Some(clock() - h(4)), "open"),
+                        case(2, Some(clock() + h(36)), "open"),
+                        case(3, Some(clock() + h(6)), "open"),
+                    ],
+                },
+                Case {
+                    name: "noise around one real decision",
+                    as_of: clock(),
+                    params: params(),
+                    objects: vec![
+                        case(4, Some(clock() - h(1)), "done"),
+                        case(5, None, "open"),
+                        unreadable,
+                        case(7, Some(clock() + h(100)), "open"),
+                        case(8, Some(clock() - h(1)), "open"),
+                    ],
+                },
+                Case {
+                    name: "no status attribute",
+                    as_of: clock(),
+                    params: json!({ "object_type": "case" }),
+                    objects: vec![case(9, Some(clock() - h(1)), "done")],
+                },
+            ],
+            bad_params: vec![
+                json!({}),
+                json!({ "object_type": "case", "horizon_hours": 0 }),
+                json!({ "object_type": "case", "status_attr": "status" }),
+                json!({ "object_type": "case", "surprise": 1 }),
+            ],
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use uuid::Uuid;
+
+    use super::fixture::{case, clock, params};
+    use super::*;
+    use crate::testing::context;
+
     fn ctx_at(as_of: DateTime<Utc>, params: Value, objects: Vec<ObjectRecord>) -> DecisionContext {
-        let mut cfg = OrgDecisionConfig::default();
-        cfg.generators.insert(
-            ID.to_owned(),
-            GeneratorSettings {
-                params,
-                ..Default::default()
-            },
-        );
-        DecisionContext::new(
-            Uuid::from_u128(7),
-            as_of,
-            ID,
-            Arc::new(cfg),
-            Arc::new(FakeView(objects)),
-        )
+        context(ID, as_of, params, objects)
     }
 
     async fn run(ctx: &DecisionContext) -> Vec<Proposal> {
@@ -443,47 +445,6 @@ mod tests {
             out[0].candidate.payload["objectId"],
             json!(Uuid::from_u128(2).to_string())
         );
-    }
-
-    #[tokio::test]
-    async fn a_minute_of_clock_movement_changes_nothing() {
-        let objs = vec![case(1, Some(clock() + Duration::hours(36)), "open")];
-        let a = run(&ctx_at(clock(), params(), objs.clone())).await;
-        let b = run(&ctx_at(clock() + Duration::minutes(1), params(), objs)).await;
-        assert_eq!(
-            a, b,
-            "a drifting field would revise the recommendation on every run"
-        );
-    }
-
-    #[tokio::test]
-    async fn output_order_does_not_depend_on_view_order() {
-        let a = vec![
-            case(1, Some(clock() - Duration::hours(1)), "open"),
-            case(2, Some(clock() - Duration::hours(1)), "open"),
-        ];
-        let mut b = a.clone();
-        b.reverse();
-        assert_eq!(
-            run(&ctx_at(clock(), params(), a)).await,
-            run(&ctx_at(clock(), params(), b)).await
-        );
-    }
-
-    #[tokio::test]
-    async fn bad_params_are_reported() {
-        for p in [
-            json!({}),
-            json!({ "object_type": "case", "horizon_hours": 0 }),
-            json!({ "object_type": "case", "status_attr": "status" }),
-            json!({ "object_type": "case", "surprise": 1 }),
-        ] {
-            let c = ctx_at(clock(), p, vec![]);
-            assert!(matches!(
-                DeadlineAtRisk.evaluate(&c, &ScopeSpec::All).await,
-                Err(GenError::InvalidData(_))
-            ));
-        }
     }
 
     #[test]
