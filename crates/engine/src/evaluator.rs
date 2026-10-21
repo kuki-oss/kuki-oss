@@ -29,6 +29,7 @@ use kuki_store::{
         transition, upsert_pending,
     },
     session::{OrgSession, with_org_tx},
+    shadow,
 };
 use kuki_types::{Action, Provenance, RecommendationStatus};
 use serde::Serialize;
@@ -69,6 +70,8 @@ pub struct EvaluatorOptions {
     pub ontology_version: i32,
     /// At most this many due recommendations are expired at the start of a run.
     pub expire_batch: i64,
+    /// Shadow proposals not proposed again within this long are pruned.
+    pub shadow_retention: Duration,
 }
 
 impl Default for EvaluatorOptions {
@@ -77,6 +80,7 @@ impl Default for EvaluatorOptions {
             ttl: Duration::days(7),
             ontology_version: 1,
             expire_batch: 500,
+            shadow_retention: Duration::days(14),
         }
     }
 }
@@ -90,8 +94,11 @@ pub struct Rejection {
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
 pub struct GeneratorReport {
     pub generator_id: String,
-    /// Shadow runs evaluate and validate but never write.
+    /// Shadow runs evaluate and validate and record what they would propose, but
+    /// never touch recommendations.
     pub shadow: bool,
+    /// Proposals recorded to `shadow_proposals` (shadow runs only).
+    pub shadowed: usize,
     pub proposed: usize,
     pub created: usize,
     pub revised: usize,
@@ -389,6 +396,23 @@ impl Evaluator {
         }
 
         if rep.shadow {
+            // Record what would have been proposed, in the shadow table only. No budget, no
+            // clearing, no recommendation is touched.
+            let generator_id = g.id().to_owned();
+            let cutoff = now - self.opts.shadow_retention;
+            let count = accepted.len();
+            with_org_tx::<_, EngineError, _>(&self.pool, session, move |c| {
+                async move {
+                    for new in &accepted {
+                        shadow::upsert(c, org, &generator_id, new, now).await?;
+                    }
+                    shadow::prune(c, org, &generator_id, cutoff).await?;
+                    Ok(())
+                }
+                .boxed()
+            })
+            .await?;
+            rep.shadowed = count;
             return Ok(());
         }
 

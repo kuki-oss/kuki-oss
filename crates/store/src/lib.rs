@@ -14,6 +14,7 @@ pub mod outbox;
 pub mod recommendation_reads;
 pub mod recommendations;
 pub mod session;
+pub mod shadow;
 pub mod tenant;
 pub mod webhook_deliveries;
 pub mod webhook_endpoints;

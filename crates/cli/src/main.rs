@@ -50,6 +50,11 @@ enum Command {
         #[command(subcommand)]
         cmd: webhooks::WebhooksCmd,
     },
+    /// Inspect what generators in shadow mode would have proposed.
+    Shadow {
+        #[command(subcommand)]
+        cmd: ShadowCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -76,6 +81,22 @@ enum ActionsCmd {
     Run,
 }
 
+#[derive(Subcommand)]
+enum ShadowCmd {
+    /// Print a generator's shadow proposals, most urgent first (KUKI_MIGRATE_DATABASE_URL
+    /// resolves the organisation).
+    Report {
+        /// Generator id, e.g. deadline.at_risk.t0.
+        generator: String,
+        /// Organisation slug or id.
+        #[arg(long)]
+        org: String,
+        /// At most this many proposals.
+        #[arg(long, default_value_t = 50)]
+        limit: i64,
+    },
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     // Logs go to stderr: `kuki keys create` prints the key on stdout, and only that.
@@ -96,6 +117,7 @@ async fn main() -> ExitCode {
         Command::Evaluate { cmd } => run_evaluate(cmd).await,
         Command::Actions { cmd } => run_actions(cmd).await,
         Command::Webhooks { cmd } => webhooks::run(cmd).await,
+        Command::Shadow { cmd } => run_shadow(cmd).await,
     };
 
     match result {
@@ -121,6 +143,21 @@ async fn run_outbox() -> Res {
 async fn run_actions(cmd: ActionsCmd) -> Res {
     match cmd {
         ActionsCmd::Run => kuki_api::run_actions(ApiConfig::from_env()?).await?,
+    }
+    Ok(())
+}
+
+async fn run_shadow(cmd: ShadowCmd) -> Res {
+    match cmd {
+        ShadowCmd::Report {
+            generator,
+            org,
+            limit,
+        } => println!(
+            "{}",
+            kuki_engine::run::shadow_report_from_env(&org, &generator, limit.clamp(1, 1000))
+                .await?
+        ),
     }
     Ok(())
 }

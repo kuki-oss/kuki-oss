@@ -1,10 +1,16 @@
 //! Entry points for the `kuki evaluate` commands. Secrets come from the environment or a `*_FILE`
 //! path, never from config files, and are never logged.
 
+use futures::FutureExt;
 use std::{collections::BTreeSet, sync::Arc};
 
 use chrono::Utc;
 use kuki_extension::Trigger;
+use kuki_store::{
+    session::{OrgSession, with_org_tx},
+    shadow,
+};
+use serde_json::json;
 use sqlx::{PgConnection, PgPool, postgres::PgPoolOptions};
 use uuid::Uuid;
 
@@ -133,4 +139,50 @@ pub async fn install_from_env(org: &str) -> Result<Vec<String>, RunnerError> {
         .iter()
         .map(|d| d.name.to_owned())
         .collect())
+}
+
+/// `kuki shadow report <generator> --org X`: what a generator in shadow mode has proposed,
+/// most urgent first, as pretty JSON. The organisation is resolved with the privileged URL; the
+/// read runs as the application role, under row-level security.
+pub async fn shadow_report_from_env(
+    org: &str,
+    generator: &str,
+    limit: i64,
+) -> Result<String, RunnerError> {
+    let org_id = resolve_org(&mut *admin_pool().await?.acquire().await?, org).await?;
+    let pool = app_pool(2).await?;
+    let session = OrgSession {
+        org_id,
+        scope_path: None,
+    };
+    let generator = generator.to_owned();
+    let rows = with_org_tx::<_, sqlx::Error, _>(&pool, &session, {
+        let generator = generator.clone();
+        move |c| async move { shadow::list(c, org_id, &generator, limit).await }.boxed()
+    })
+    .await?;
+    let proposals: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "dedup_key": r.dedup_key,
+                "decision_type": r.decision_type,
+                "org_unit_id": r.org_unit_id,
+                "urgency": r.urgency,
+                "confidence": r.confidence,
+                "summary": r.summary,
+                "first_seen_at": r.first_seen_at,
+                "last_seen_at": r.last_seen_at,
+                "seen_count": r.seen_count,
+                "body": r.body,
+            })
+        })
+        .collect();
+    serde_json::to_string_pretty(&json!({
+        "organisation_id": org_id,
+        "generator_id": generator,
+        "count": proposals.len(),
+        "proposals": proposals,
+    }))
+    .map_err(|e| RunnerError::Config(e.to_string()))
 }
