@@ -300,6 +300,7 @@ pub(crate) mod fixture {
                         case(2, Some(clock() + h(36)), "open"),
                         case(3, Some(clock() + h(6)), "open"),
                     ],
+                    ..Case::default()
                 },
                 Case {
                     name: "noise around one real decision",
@@ -312,12 +313,14 @@ pub(crate) mod fixture {
                         case(7, Some(clock() + h(100)), "open"),
                         case(8, Some(clock() - h(1)), "open"),
                     ],
+                    ..Case::default()
                 },
                 Case {
                     name: "no status attribute",
                     as_of: clock(),
                     params: json!({ "object_type": "case" }),
                     objects: vec![case(9, Some(clock() - h(1)), "done")],
+                    ..Case::default()
                 },
             ],
             bad_params: vec![
