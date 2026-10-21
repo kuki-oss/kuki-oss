@@ -39,7 +39,7 @@ pub struct EventRecord {
     pub type_name: String,
     pub type_version: i32,
     pub subject_id: Uuid,
-    pub occured_at: DateTime<Utc>,
+    pub occurred_at: DateTime<Utc>,
     pub recorded_at: DateTime<Utc>,
     pub payload: Value,
     pub supersedes: Option<Uuid>,

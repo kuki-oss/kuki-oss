@@ -86,7 +86,7 @@ fn event(r: EventRow) -> EventRecord {
         type_name: r.kind,
         type_version: r.type_version,
         subject_id: r.subject_id,
-        occured_at: r.occurred_at,
+        occurred_at: r.occurred_at,
         recorded_at: r.recorded_at,
         payload: r.payload,
         supersedes: r.supersedes,

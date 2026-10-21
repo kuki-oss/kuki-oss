@@ -33,7 +33,7 @@ fn valid_at(from: DateTime<Utc>, to: Option<DateTime<Utc>>, at: DateTime<Utc>) -
 
 /// An in-memory ontology that answers as of `as_of`, like the real view: objects and links not
 /// valid at the clock, and events not yet recorded, do not exist. Events come back ordered by
-/// `(occured_at, id)`; objects and links come back in the order given, so a generator that
+/// `(occurred_at, id)`; objects and links come back in the order given, so a generator that
 /// depends on their order is caught by the contract's reversal check.
 pub struct FakeView {
     pub as_of: DateTime<Utc>,
@@ -83,12 +83,12 @@ impl OntologyView for FakeView {
                 e.subject_id == q.subject_id
                     && e.recorded_at <= self.as_of
                     && q.type_name.as_deref().is_none_or(|t| e.type_name == t)
-                    && q.occurred_from.is_none_or(|f| e.occured_at >= f)
-                    && q.occurred_to.is_none_or(|t| e.occured_at < t)
+                    && q.occurred_from.is_none_or(|f| e.occurred_at >= f)
+                    && q.occurred_to.is_none_or(|t| e.occurred_at < t)
             })
             .cloned()
             .collect();
-        out.sort_by_key(|e| (e.occured_at, e.id));
+        out.sort_by_key(|e| (e.occurred_at, e.id));
         Ok(out)
     }
 }
@@ -137,7 +137,7 @@ pub fn event(
         type_name: type_name.into(),
         type_version: 1,
         subject_id: Uuid::from_u128(subject),
-        occured_at: occurred,
+        occurred_at: occurred,
         recorded_at: occurred,
         payload,
         supersedes: None,
@@ -285,9 +285,7 @@ pub async fn check_generator(
         objects.reverse();
         let mut links = case.links.clone();
         links.reverse();
-        let shuffled = run(g, case, case.as_of, objects, links)
-            .await
-            .map_err(at)?;
+        let shuffled = run(g, case, case.as_of, objects, links).await.map_err(at)?;
         if shuffled != first {
             return Err(at(
                 "depends on the order the view returns objects or links in".into(),
