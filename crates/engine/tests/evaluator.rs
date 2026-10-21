@@ -733,6 +733,17 @@ async fn a_shadow_generator_runs_but_surfaces_nothing(admin: PgPool) {
         .await,
         0
     );
+    assert_eq!(g.shadowed, 2);
+    assert_eq!(
+        count(
+            &admin,
+            "SELECT count(*) FROM shadow_proposals WHERE organisation_id = $1",
+            org
+        )
+        .await,
+        2,
+        "what would have been proposed is recorded, in the shadow table only"
+    );
 }
 
 #[sqlx::test(migrations = "../../migrations")]
@@ -828,5 +839,154 @@ async fn an_event_driven_run_clears_only_the_entities_it_covers(admin: PgPool) {
         status(2).await,
         "pending",
         "case 2 closed too, but this run did not cover it"
+    );
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn a_shadow_rerun_updates_the_row_and_counts_the_run(admin: PgPool) {
+    let app = app_pool(&admin).await;
+    let org = deadline_org(&admin, "acme", "shadow", 20, true).await;
+    for n in 1..=2 {
+        put_obj(
+            &admin,
+            org,
+            n,
+            case_attrs("open", -5),
+            "2026-10-01T00:00:00Z",
+        )
+        .await;
+    }
+    let ev = builtin_evaluator(&app);
+    ev.run(&trigger(org), now()).await.unwrap();
+    ev.run(&trigger(org), now() + Duration::minutes(1))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        count(
+            &admin,
+            "SELECT count(*) FROM shadow_proposals WHERE organisation_id = $1",
+            org
+        )
+        .await,
+        2,
+        "one row per proposal, not per run"
+    );
+    assert_eq!(
+        count(
+            &admin,
+            "SELECT count(*) FROM shadow_proposals WHERE organisation_id = $1 AND seen_count = 2",
+            org
+        )
+        .await,
+        2
+    );
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn shadow_rows_are_pruned_after_the_retention_window(admin: PgPool) {
+    let app = app_pool(&admin).await;
+    let org = deadline_org(&admin, "acme", "shadow", 20, true).await;
+    for n in 1..=2 {
+        put_obj(
+            &admin,
+            org,
+            n,
+            case_attrs("open", -5),
+            "2026-10-01T00:00:00Z",
+        )
+        .await;
+    }
+    let ev = builtin_evaluator(&app);
+    ev.run(&trigger(org), now()).await.unwrap();
+
+    // Case 1 closes; fifteen days later only case 2 is still proposed, and the default
+    // retention is fourteen days.
+    new_version(
+        &admin,
+        org,
+        1,
+        case_attrs("done", -5),
+        "2026-10-11T11:00:00Z",
+    )
+    .await;
+    ev.run(&trigger(org), now() + Duration::days(15))
+        .await
+        .unwrap();
+
+    let keys: Vec<String> =
+        sqlx::query_scalar("SELECT dedup_key FROM shadow_proposals WHERE organisation_id = $1")
+            .bind(org)
+            .fetch_all(&admin)
+            .await
+            .unwrap();
+    assert_eq!(keys.len(), 1, "{keys:?}");
+    assert!(keys[0].ends_with(&u(2).to_string()));
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn shadow_rows_never_spend_the_review_budget_or_reach_the_inbox(admin: PgPool) {
+    let app = app_pool(&admin).await;
+    let org = deadline_org(&admin, "acme", "shadow", 1, true).await;
+    for n in 1..=3 {
+        put_obj(
+            &admin,
+            org,
+            n,
+            case_attrs("open", -5),
+            "2026-10-01T00:00:00Z",
+        )
+        .await;
+    }
+    let ev = builtin_evaluator(&app);
+    ev.run(&trigger(org), now()).await.unwrap();
+    assert_eq!(
+        count(
+            &admin,
+            "SELECT count(*) FROM shadow_proposals WHERE organisation_id = $1",
+            org
+        )
+        .await,
+        3
+    );
+
+    // Promote the generator. The budget is one a day: if the shadow run had spent any of it,
+    // nothing could be created now.
+    sqlx::query(
+        "UPDATE organisations
+            SET config = jsonb_set(config, '{decision,generators,deadline.at_risk.t0,mode}', '\"active\"')
+          WHERE id = $1",
+    )
+    .bind(org)
+    .execute(&admin)
+    .await
+    .unwrap();
+    let report = ev
+        .run(&trigger(org), now() + Duration::minutes(1))
+        .await
+        .unwrap();
+    let g = &report.generators[0];
+    assert!(!g.shadow);
+    assert_eq!((g.created, g.deferred_by_budget), (1, 2));
+
+    assert_eq!(
+        count(
+            &admin,
+            "SELECT count(*) FROM recommendations WHERE organisation_id = $1",
+            org
+        )
+        .await,
+        1,
+        "only the live run's recommendation exists"
+    );
+    assert_eq!(
+        count(
+            &admin,
+            "SELECT count(*) FROM shadow_proposals WHERE organisation_id = $1 AND seen_count = 1",
+            org
+        )
+        .await,
+        3,
+        "a live run neither writes to nor refreshes the shadow table"
     );
 }
