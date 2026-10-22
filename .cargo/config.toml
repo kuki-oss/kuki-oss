@@ -1,6 +1,6 @@
 [build]
-rustc-wrapper = "dev-scripts/rustc-wrapper"
+rustc-wrapper = "sccache"
 
 [env]
-CMAKE_C_COMPILER_LAUNCHER = { value = "scripts/rustc-wrapper", relative = true }
-CMAKE_CXX_COMPILER_LAUNCHER = { value = "scripts/rustc-wrapper", relative = true }
+CMAKE_C_COMPILER_LAUNCHER = { value = "sccache" }
+CMAKE_CXX_COMPILER_LAUNCHER = { value = "sccache" }

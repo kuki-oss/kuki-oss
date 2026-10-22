@@ -1,0 +1,276 @@
+# =============================================================================
+# sccache configuration -- local-disk-only setup
+# Linux path: ~/.config/sccache/config   (override the path with SCCACHE_CONF)
+#
+# Copy these to your local sccache configuration file. This is just a starting
+# point for you. Customize it and find what works for you.
+#
+# HOW THIS FILE IS USED
+#  - The sccache SERVER reads this file once, at startup. After any change run
+#    `sccache --stop-server`; the next cargo call starts a fresh server.
+#  - One server is shared by every project and worktree your user builds, so
+#    every setting here is global .
+#  - Environment variables override this file (stated in the sccache docs). A
+#    variable set in your shell silently beats the value below.
+#  - The server inherits the environment of whichever process started it. If an
+#    editor launched without your shell variables starts it first, those
+#    variables are missing for every later build.
+#  - TOML rule: top-level keys (server_startup_timeout_ms, basedirs) must appear
+#    BEFORE the first [table] header. Every inactive line below is commented
+#    individually, so nothing is accidentally attached to the wrong table.
+#  - Verify with `sccache --show-stats`: it prints the cache location, size
+#    limit, base directories and client version.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# TOP-LEVEL KEYS (no env var equivalent for the first)
+# -----------------------------------------------------------------------------
+
+# server_startup_timeout_ms: how long a client waits for the server to start
+# before giving up. Doc example: 10000. Raise it on a slow or busy disk if you
+# see "failed to start server" errors. Unset = built-in default (not stated in
+# the docs).
+# server_startup_timeout_ms = 10000
+
+# basedirs: directory prefixes stripped from source paths before cache keys are
+# computed. Env equivalent: SCCACHE_BASEDIRS (env wins over this key).
+#  - Purpose (per the docs): cache hits across different absolute paths for the
+#    same source, e.g. parallel checkouts and git worktrees.
+#  - Longest matching prefix wins. Example from the docs:
+#    "/home/user/project/src/main.c" becomes "src/main.c".
+#  - Applied to preprocessed source AND to compiler arguments (in arguments,
+#    only the whole argument, the value after "=", and the value glued to a
+#    short option are considered).
+#  - Absolute paths only. The docs say a relative path in the env form prevents
+#    the server from starting.
+#  - Env form separates entries with ":" on Linux/macOS and ";" on Windows.
+#  - Matching is case-sensitive except on Windows.
+#  - The docs describe the effect in terms of preprocessed source and flags, so
+#    confirm it helps Rust workspace crates by testing two worktrees.
+#  - Stripping a shared parent still leaves differing worktree names, so list
+#    each worktree root.
+# basedirs = [
+#   "/home/YOU/kuki/worktrees/kuki-oss/dev-feat-sccache",
+#   "/home/YOU/kuki/worktrees/kuki-oss/feat-kuki-packs",
+# ]
+
+# -----------------------------------------------------------------------------
+# LOCAL DISK CACHE  (ACTIVE)
+# -----------------------------------------------------------------------------
+# [cache.disk]
+# dir: where cache entries are stored. Env: SCCACHE_DIR.
+# Use persistent storage; the docs' example, /tmp/.cache/sccache, is cleared by
+# reboots on many systems. Your current location (from --show-stats) is this one.
+# dir = "/home/YOU/.cache/sccache"
+
+# size: maximum cache size in BYTES in this file. Env: SCCACHE_CACHE_SIZE takes
+# units instead (e.g. "20G"). Default is 10 GiB. 10737418240 = 10 GiB. Raise it
+# if test-build artifacts (--all-features, debug info) push out useful entries.
+# size = 10737418240
+
+# rw_mode: READ_ONLY or READ_WRITE. Env: SCCACHE_LOCAL_RW_MODE. The docs
+# document the env var but show no file key for local disk, so this line is a
+# guess at the key name: [verify] before relying on it.
+# rw_mode = "READ_WRITE"
+
+# -----------------------------------------------------------------------------
+# C/C++ PREPROCESSOR ("DIRECT") MODE
+# Applies to C/C++/assembler (e.g. librdkafka via CMake), not Rust. Your
+# --show-stats reports direct mode as enabled. The values below are the docs'
+# EXAMPLE values; the docs do not state the defaults.
+# -----------------------------------------------------------------------------
+# [cache.disk.preprocessor_cache_mode]
+
+# use_preprocessor_cache_mode: hash the source plus a manifest of included
+# headers instead of running the preprocessor on every compile. Env: SCCACHE_DIRECT.
+# use_preprocessor_cache_mode = true
+
+# file_stat_matches: treat a file as unchanged when its stat info matches,
+# instead of re-hashing its contents. Faster, but wrong if a tool rewrites a
+# file while preserving mtime and size.
+# file_stat_matches = true
+
+# use_ctime_for_stat: also compare ctime (inode change time). Safer against
+# tools that restore mtimes, at the cost of misses after metadata-only changes.
+# use_ctime_for_stat = true
+
+# ignore_time_macros: ignore __TIME__ so files using it can be cached. A hit
+# then carries a stale timestamp.
+# ignore_time_macros = false
+
+# skip_system_headers: don't hash system headers. Faster, but a system header
+# change is not noticed.
+# skip_system_headers = false
+
+# hash_working_directory: include the compiler's working directory in the key.
+# true keeps debug info correct but reduces sharing between directories. CMake
+# compiles inside target/.../out/build, which differs per worktree.
+# hash_working_directory = true
+
+# -----------------------------------------------------------------------------
+# MULTI-LEVEL CACHE (not needed for local-only)
+# Stacks backends fast-to-slow with backfill. Each level must be configured
+# separately in its own table below.
+# -----------------------------------------------------------------------------
+# [cache.multilevel]
+
+# chain: ordered backend names, left = fastest. Env: SCCACHE_MULTILEVEL_CHAIN
+# (comma separated). Valid names: disk, redis, memcached, s3, gcs, azure, gha,
+# webdav, oss, cos. If unset, sccache uses single-level mode.
+# chain = ["disk", "s3"]
+
+# write_error_policy: ignore (never fail on a write error, only log), l0
+# (default: fail only if the first level fails), all (fail if any read-write
+# level fails). Read-only levels are always skipped.
+# Env: SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY.
+# write_error_policy = "l0"
+
+# -----------------------------------------------------------------------------
+# REMOTE BACKENDS (all disabled)
+# key_prefix on every backend separates projects/toolchains in a shared store.
+# READ_ONLY lets a consumer read a cache without being able to write to it.
+# Never commit credentials; prefer the env var forms.
+# -----------------------------------------------------------------------------
+
+# --- S3-compatible (AWS S3, Cloudflare R2, MinIO) ---
+# [cache.s3]
+# bucket = "name"                                  # env: SCCACHE_BUCKET
+# endpoint = "s3-us-east-1.amazonaws.com"          # env: SCCACHE_ENDPOINT. R2: "https://<ACCOUNT_ID>.r2.cloudflarestorage.com"
+# use_ssl = true                                   # env: SCCACHE_S3_USE_SSL
+# key_prefix = "s3prefix"                          # env: SCCACHE_S3_KEY_PREFIX
+# server_side_encryption = false                   # SSE-S3 (AES256). No env var documented.
+# server_side_encryption_aws_kms = false           # SSE-KMS with the AWS-managed key (aws/s3).
+# server_side_encryption_kms_key_id = "arn:aws:kms:us-east-1:111:key/abc"  # customer-managed key; takes precedence when set.
+# Env-only here (no file key shown in the docs): SCCACHE_REGION (required for
+# AWS S3; "auto" for R2; defaults to us-east-1 if the endpoint is not the
+# default and no region is set) and SCCACHE_S3_RW_MODE (READ_ONLY).
+
+# --- Redis ---
+# [cache.redis]
+# url = "redis://user:passwd@1.2.3.4:6379/?db=1"   # DEPRECATED; env SCCACHE_REDIS. Use endpoint.
+# endpoint = "redis://127.0.0.1:6379"              # env: SCCACHE_REDIS_ENDPOINT. Single node; exclusive with cluster_endpoints.
+# cluster_endpoints = "redis://10.0.0.1:6379,redis://10.0.0.2:6379"  # env: SCCACHE_REDIS_CLUSTER_ENDPOINTS.
+# username = "user"                                # env: SCCACHE_REDIS_USERNAME
+# password = "passwd"                              # env: SCCACHE_REDIS_PASSWORD
+# db = 1                                           # env: SCCACHE_REDIS_DB (default 0)
+# expiration = 3600                                # seconds; env: SCCACHE_REDIS_EXPIRATION / SCCACHE_REDIS_TTL (default 0 = never expire)
+# key_prefix = "/custom/prefix/if/need"            # env: SCCACHE_REDIS_KEY_PREFIX
+# Env-only: SCCACHE_REDIS_RW_MODE (READ_ONLY).
+
+# --- Memcached ---
+# [cache.memcached]
+# url = "127.0.0.1:11211"                          # DEPRECATED alias of endpoint; env SCCACHE_MEMCACHED.
+# endpoint = "tcp://127.0.0.1:11211"               # env: SCCACHE_MEMCACHED_ENDPOINT
+# username = "user"                                # env: SCCACHE_MEMCACHED_USERNAME
+# password = "passwd"                              # env: SCCACHE_MEMCACHED_PASSWORD
+# expiration = 3600                                # seconds; env: SCCACHE_MEMCACHED_EXPIRATION (default 86400 = 24h)
+# key_prefix = "/custom/prefix/if/need"            # env: SCCACHE_MEMCACHED_KEY_PREFIX
+# Env-only: SCCACHE_MEMCACHED_RW_MODE (READ_ONLY).
+
+# --- Google Cloud Storage ---
+# [cache.gcs]
+# bucket = "bucket"                                # env: SCCACHE_GCS_BUCKET
+# key_prefix = "prefix"                            # no env var documented
+# cred_path = "/psst/secret/cred"                  # env: SCCACHE_GCS_KEY_PATH
+# oauth_url = "..."                                # optional. The docs list SCCACHE_GCS_CREDENTIALS_URL without saying which key it maps to; likely this one.
+# deprecated_url = "..."                           # optional, deprecated; no env var documented.
+# rw_mode = "READ_ONLY"                            # or "READ_WRITE"; env: SCCACHE_GCS_RW_MODE
+
+# --- Azure Blob Storage ---
+# A block with a container but no auth source errors at server startup. Use the
+# connection string OR the Microsoft Entra ID fields, not both.
+# [cache.azure]
+# container = "my_container_name"                  # required; env: SCCACHE_AZURE_BLOB_CONTAINER
+# key_prefix = ""                                  # prepended to each blob key; env: SCCACHE_AZURE_KEY_PREFIX
+# connection_string = "BlobEndpoint=https://example.blob.core.windows.net/;SharedAccessSignature=..."  # shared-key auth; env: SCCACHE_AZURE_CONNECTION_STRING
+# storage_account = "mystorageacct"                # Entra ID auth; endpoint becomes https://{account}.blob.core.windows.net; env: SCCACHE_AZURE_STORAGE_ACCOUNT
+# endpoint = "https://mystorageacct.blob.core.usgovcloudapi.net"  # full endpoint (sovereign clouds, custom DNS); https only (http for loopback); beats storage_account; env: SCCACHE_AZURE_ENDPOINT
+# Entra ID credentials come from the AZURE_* environment (AZURE_TENANT_ID /
+# AZURE_CLIENT_ID / AZURE_CLIENT_SECRET, AZURE_FEDERATED_TOKEN_FILE, or IMDS).
+# Env-only: SCCACHE_AZURE_RW_MODE (READ_ONLY).
+
+# --- GitHub Actions cache (GitHub only; no use on GitLab) ---
+# [cache.gha]
+# url = "http://localhost"                         # env: SCCACHE_GHA_CACHE_URL / ACTIONS_RESULTS_URL
+# token = "secret"                                 # env: SCCACHE_GHA_RUNTIME_TOKEN / ACTIONS_RUNTIME_TOKEN
+# cache_to = "sccache-latest"                      # cache key to write; env: SCCACHE_GHA_CACHE_TO
+# cache_from = "sccache-"                          # keys to read (comma separated in env); env: SCCACHE_GHA_CACHE_FROM
+# Env-only: SCCACHE_GHA_RW_MODE (READ_ONLY).
+
+# --- WebDAV ---
+# [cache.webdav]
+# endpoint = "http://192.168.10.42:80/some/webdav.php"  # env: SCCACHE_WEBDAV_ENDPOINT
+# key_prefix = "/custom/webdav/subfolder/if/need"  # env: SCCACHE_WEBDAV_KEY_PREFIX
+# username = "alice"                               # basic auth; env: SCCACHE_WEBDAV_USERNAME
+# password = "secret12"                            # env: SCCACHE_WEBDAV_PASSWORD
+# token = "token123"                               # bearer token; exclusive with username/password; env: SCCACHE_WEBDAV_TOKEN
+# disable_create_dir = false                       # skip PROPFIND/MKCOL before writes, for servers lacking them; env: SCCACHE_WEBDAV_DISABLE_CREATE_DIR
+# Env-only: SCCACHE_WEBDAV_RW_MODE (READ_ONLY).
+
+# --- Alibaba Cloud OSS ---
+# [cache.oss]
+# bucket = "name"                                  # env: SCCACHE_OSS_BUCKET
+# endpoint = "oss-us-east-1.aliyuncs.com"          # env: SCCACHE_OSS_ENDPOINT
+# key_prefix = "ossprefix"                         # env: SCCACHE_OSS_KEY_PREFIX
+# no_credentials = true                            # env: SCCACHE_OSS_NO_CREDENTIALS
+# Credentials only via env: ALIBABA_CLOUD_ACCESS_KEY_ID, ALIBABA_CLOUD_ACCESS_KEY_SECRET.
+# Env-only: SCCACHE_OSS_RW_MODE (READ_ONLY).
+
+# --- Tencent Cloud COS ---
+# [cache.cos]
+# bucket = "name"                                  # env: SCCACHE_COS_BUCKET
+# endpoint = "cos.na-siliconvalley.myqcloud.com"   # env: SCCACHE_COS_ENDPOINT
+# key_prefix = "cosprefix"                         # env: SCCACHE_COS_KEY_PREFIX
+# Credentials only via env: TENCENTCLOUD_SECRET_ID, TENCENTCLOUD_SECRET_KEY.
+# Env-only: SCCACHE_COS_RW_MODE (READ_ONLY).
+
+# -----------------------------------------------------------------------------
+# DISTRIBUTED COMPILATION (not needed; requires separate sccache-dist servers)
+# Ignores SCCACHE_CLIENT_SIDE when in use.
+# -----------------------------------------------------------------------------
+# [dist]
+# scheduler_url = "http://1.2.3.4:10600"           # where to find the scheduler
+# toolchains = []                                  # prepackaged toolchains
+# toolchain_cache_size = 5368709120                # bytes (5 GiB)
+# cache_dir = "/home/user/.cache/sccache-dist-client"  # env SCCACHE_DIST_CLIENT_CACHE_DIR overrides this
+# [dist.auth]
+# type = "token"
+# token = "secrettoken"
+
+# =============================================================================
+# ENV-ONLY OPTIONS -- these CANNOT be set in this file. Put them in the
+# environment (see the second snippet) before the server starts. These
+# are just here for reference.
+# =============================================================================
+# SCCACHE_CONF                path to this config file. Cannot be set inside it.
+# SCCACHE_IDLE_TIMEOUT        seconds the server waits for requests before it
+#                             exits; 0 = run permanently. Default not stated in
+#                             the docs I was given.
+# SCCACHE_NO_DAEMON=1         run the server in the foreground instead of
+#                             backgrounding it (debugging).
+# SCCACHE_STARTUP_NOTIFY      socket path the server signals when it is ready.
+# SCCACHE_MAX_FRAME_LENGTH    maximum amount of data per client/server message.
+# SCCACHE_CLIENT_SIDE=1       compile in the client process; the server only
+#                             gateways to cache storage. Docs call it the
+#                             recommended mode and expect it to become the only
+#                             one. Ignored with SCCACHE_ERROR_LOG or distributed
+#                             compilation.
+# SCCACHE_SKIP_CACHE_CHECK    true/on/1: skip the remote-cache capability check
+#                             (.sccache_check read/write); the configured
+#                             rw_mode is used unverified. Remote backends only.
+# SCCACHE_CACHE_MULTIARCH     any value, even 0: allow caching builds with
+#                             several -arch flags (macOS). No effect on Linux.
+# SCCACHE_CACHE_ZSTD_LEVEL    1-22, default 3. Docs' example: level 10 gives
+#                             about 0.9x size for about 1.6x time. Applies only
+#                             to newly written entries; reset the cache to apply
+#                             it to all.
+# SCCACHE_LOG                 log level (env_logger values: error, warn, info,
+#                             debug, trace).
+# SCCACHE_LOG_MILLIS          any value: millisecond timestamps in logs.
+# SCCACHE_ERROR_LOG           file path for an error log. Turns off client-side
+#                             mode.
+# SCCACHE_ALLOW_CORE_DUMPS    allow the server to write core dumps on a crash.
+# SCCACHE_CACHED_CONF         listed in the docs without a description; leave
+#                             unset.
+# SCCACHE_SERVER_PORT         not in the docs you pasted; commonly documented as
+#                             the server's port (default 4226). [verify]

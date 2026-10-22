@@ -63,3 +63,9 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+[profile.dev]
+incremental = false
+
+[profile.test]
+incremental = false
