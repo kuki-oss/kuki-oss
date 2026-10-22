@@ -6,7 +6,7 @@ use sqlx::PgConnection;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::generators::deadline::DeadlineAtRisk;
+use crate::generators::{anomaly::SignalAnomaly, deadline::DeadlineAtRisk};
 pub use crate::pack::DecisionTypeDef;
 use crate::pack::Pack;
 
@@ -34,8 +34,39 @@ fn work_escalate() -> DecisionTypeDef {
     }
 }
 
+/// `signal.investigate`: the payload `signal.anomaly.t0` produces.
+fn signal_investigate() -> DecisionTypeDef {
+    DecisionTypeDef {
+        name: "signal.investigate",
+        pack: PACK,
+        schema_ref: "kuki.base/signal.investigate.json",
+        default_action: Some("builtin:flag_review"),
+        schema: json!({
+            "type": "object",
+            "required": ["subjectId", "subjectType", "eventType", "valueField", "latest",
+                         "latestEventId", "latestAt", "baselineMean", "baselineSpread",
+                         "zScore", "readings", "direction"],
+            "properties": {
+                "subjectId":      { "type": "string", "minLength": 1 },
+                "subjectType":    { "type": "string", "minLength": 1 },
+                "eventType":      { "type": "string", "minLength": 1 },
+                "valueField":     { "type": "string", "minLength": 1 },
+                "latest":         { "type": "number" },
+                "latestEventId":  { "type": "string", "minLength": 1 },
+                "latestAt":       { "type": "string", "minLength": 1 },
+                "baselineMean":   { "type": "number" },
+                "baselineSpread": { "type": "number" },
+                "zScore":         { "type": "number" },
+                "readings":       { "type": "integer", "minimum": 1 },
+                "direction":      { "enum": ["above", "below"] }
+            },
+            "additionalProperties": false
+        }),
+    }
+}
+
 pub fn decision_types() -> Vec<DecisionTypeDef> {
-    vec![work_escalate()]
+    vec![work_escalate(), signal_investigate()]
 }
 
 /// The pack kuki-oss ships: domain-neutral decision types and
@@ -45,7 +76,7 @@ pub fn base_pack() -> Pack {
         name: PACK,
         version: semver::Version::new(0, 1, 0),
         decision_types: decision_types(),
-        generators: vec![Arc::new(DeadlineAtRisk)],
+        generators: vec![Arc::new(DeadlineAtRisk), Arc::new(SignalAnomaly)],
     }
 }
 
@@ -120,9 +151,12 @@ mod tests {
     async fn every_generator_in_the_base_pack_meets_the_generator_contract() {
         use std::collections::BTreeMap;
 
-        use crate::generators::deadline;
+        use crate::generators::{anomaly, deadline};
 
-        let fixtures = BTreeMap::from([(deadline::ID, deadline::fixture::fixtures())]);
+        let fixtures = BTreeMap::from([
+            (deadline::ID, deadline::fixture::fixtures()),
+            (anomaly::ID, anomaly::fixture::fixtures()),
+        ]);
         crate::testing::check_pack(&base_pack(), &fixtures)
             .await
             .unwrap();
