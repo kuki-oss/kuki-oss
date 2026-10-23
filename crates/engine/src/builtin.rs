@@ -6,7 +6,9 @@ use sqlx::PgConnection;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::generators::{anomaly::SignalAnomaly, deadline::DeadlineAtRisk};
+use crate::generators::{
+    anomaly::SignalAnomaly, capacity::CapacityConflict, deadline::DeadlineAtRisk,
+};
 pub use crate::pack::DecisionTypeDef;
 use crate::pack::Pack;
 
@@ -65,8 +67,34 @@ fn signal_investigate() -> DecisionTypeDef {
     }
 }
 
+/// `capacity.rebalance`: the payload `capacity.conflict.t0` produces.
+fn capacity_rebalance() -> DecisionTypeDef {
+    DecisionTypeDef {
+        name: "capacity.rebalance",
+        pack: PACK,
+        schema_ref: "kuki.base/capacity.rebalance.json",
+        default_action: Some("builtin:flag_review"),
+        schema: json!({
+            "type": "object",
+            "required": ["resourceId", "resourceType", "capacity", "load", "ratio",
+                         "overloaded", "workCount", "unsized"],
+            "properties": {
+                "resourceId":   { "type": "string", "minLength": 1 },
+                "resourceType": { "type": "string", "minLength": 1 },
+                "capacity":     { "type": "number", "exclusiveMinimum": 0 },
+                "load":         { "type": "number", "minimum": 0 },
+                "ratio":        { "type": "number", "minimum": 0 },
+                "overloaded":   { "type": "boolean" },
+                "workCount":    { "type": "integer", "minimum": 0 },
+                "unsized":      { "type": "integer", "minimum": 0 }
+            },
+            "additionalProperties": false
+        }),
+    }
+}
+
 pub fn decision_types() -> Vec<DecisionTypeDef> {
-    vec![work_escalate(), signal_investigate()]
+    vec![work_escalate(), signal_investigate(), capacity_rebalance()]
 }
 
 /// The pack kuki-oss ships: domain-neutral decision types and
@@ -76,7 +104,11 @@ pub fn base_pack() -> Pack {
         name: PACK,
         version: semver::Version::new(0, 1, 0),
         decision_types: decision_types(),
-        generators: vec![Arc::new(DeadlineAtRisk), Arc::new(SignalAnomaly)],
+        generators: vec![
+            Arc::new(DeadlineAtRisk),
+            Arc::new(SignalAnomaly),
+            Arc::new(CapacityConflict),
+        ],
     }
 }
 
@@ -151,11 +183,12 @@ mod tests {
     async fn every_generator_in_the_base_pack_meets_the_generator_contract() {
         use std::collections::BTreeMap;
 
-        use crate::generators::{anomaly, deadline};
+        use crate::generators::{anomaly, capacity, deadline};
 
         let fixtures = BTreeMap::from([
             (deadline::ID, deadline::fixture::fixtures()),
             (anomaly::ID, anomaly::fixture::fixtures()),
+            (capacity::ID, capacity::fixture::fixtures()),
         ]);
         crate::testing::check_pack(&base_pack(), &fixtures)
             .await
