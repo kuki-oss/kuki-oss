@@ -6,6 +6,7 @@ use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::EnvFilter;
 
 mod admin;
+mod import;
 mod webhooks;
 
 type Res = Result<(), Box<dyn Error>>;
@@ -54,6 +55,10 @@ enum Command {
     Shadow {
         #[command(subcommand)]
         cmd: ShadowCmd,
+    },
+    Import {
+        #[command(subcommand)]
+        cmd: import::ImportCmd,
     },
 }
 
@@ -118,6 +123,7 @@ async fn main() -> ExitCode {
         Command::Actions { cmd } => run_actions(cmd).await,
         Command::Webhooks { cmd } => webhooks::run(cmd).await,
         Command::Shadow { cmd } => run_shadow(cmd).await,
+        Command::Import { cmd } => import::run(cmd),
     };
 
     match result {

@@ -57,6 +57,10 @@ serde_path_to_error = "0.1"
 clap = { version = "4", features = ["derive"] }
 async-graphql = { version = "7.2.1", default-features = false, features = ["chrono"] }
 rdkafka = { version = "0.39.0", default-features = false, features = ["tokio", "cmake-build"] }
+csv = "1"
+calamine = "0.37.0"
+# This is purely used to build XLSX files inside the tests.
+rust_xlsxwriter = "0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
