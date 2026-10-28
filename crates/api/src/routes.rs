@@ -38,8 +38,10 @@ pub fn router(state: AppState) -> Router {
                 .get(crate::graphql::upgrade_ws),
         )
         .layer(axum::extract::DefaultBodyLimit::disable())
+        .layer(axum::middleware::from_fn(crate::hardening::timeout))
         .layer(axum::middleware::from_fn(crate::ratelimit::report))
         .layer(axum::middleware::from_fn(crate::observe::request_context))
+        .layer(axum::middleware::from_fn(crate::hardening::secure_headers))
         .with_state(state)
 }
 
@@ -184,5 +186,20 @@ mod tests {
             .unwrap();
         let res = app(keys, true).oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn the_router_hardens_every_response() {
+        for (uri, expect) in [
+            ("/v1/health/live", StatusCode::OK),
+            ("/v1/nothing-here", StatusCode::NOT_FOUND),
+        ] {
+            let req = Request::builder().uri(uri).body(Body::empty()).unwrap();
+            let res = app(MemoryKeys::default(), true).oneshot(req).await.unwrap();
+            assert_eq!(res.status(), expect, "{uri}");
+            assert_eq!(res.headers()["x-content-type-options"], "nosniff", "{uri}");
+            assert_eq!(res.headers()["cache-control"], "no-store", "{uri}");
+            assert!(res.headers().contains_key("x-request-id"), "{uri}");
+        }
     }
 }

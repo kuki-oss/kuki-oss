@@ -170,6 +170,17 @@ impl ApiError {
     pub fn unavailable(detail: &'static str) -> Self {
         Self::new(ErrorCode::Internal, StatusCode::SERVICE_UNAVAILABLE, detail)
     }
+    /// INTERNAL with HTTP 504: the request outlived the server's time limit.
+    pub fn timeout(limit_secs: u64) -> Self {
+        Self::new(
+            ErrorCode::Internal,
+            StatusCode::GATEWAY_TIMEOUT,
+            format!(
+                "The request exceeded the {limit_secs} second time limit. Retry it; \
+                 ingest calls resume under the same Idempotency-Key."
+            ),
+        )
+    }
     pub fn internal(cause: impl std::fmt::Display) -> Self {
         let mut e = Self::new(
             ErrorCode::Internal,

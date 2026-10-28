@@ -11,6 +11,7 @@ use tower_http::sensitive_headers::SetSensitiveRequestHeadersLayer;
 
 use crate::bao::{BaoClient, BaoHasher, BaoReadiness};
 use crate::config::ApiConfig;
+use crate::hardening::{HardeningConfig, RequestTimeout};
 use crate::pg::{AllReady, PgKeyStore, PgReadiness};
 use crate::ratelimit::RateLimitConfig;
 use crate::routes::router;
@@ -102,6 +103,7 @@ async fn start_live_feed() -> Result<Option<LiveFeed>, ServeError> {
 pub async fn serve(config: ApiConfig) -> Result<(), ServeError> {
     let bind = config.bind;
     let limits = RateLimitConfig::from_env().map_err(ServeError::Config)?;
+    let hardening = HardeningConfig::from_env().map_err(ServeError::Config)?;
     let state = build_state(config).await?;
     let live = start_live_feed().await?;
 
@@ -117,12 +119,35 @@ pub async fn serve(config: ApiConfig) -> Result<(), ServeError> {
         }
         None => tracing::warn!("per-key rate limiting is disabled (KUKI_RATE_LIMIT_BURST=0)"),
     }
+    match hardening.request_timeout {
+        Some(t) => {
+            tracing::info!(seconds = t.as_secs(), "request timeout enabled");
+            app = app.layer(axum::Extension(RequestTimeout(t)));
+        }
+        None => tracing::warn!("request timeout is disabled (KUKI_REQUEST_TIMEOUT_SECONDS=0)"),
+    }
     if let Some(l) = &live {
         app = app.layer(axum::Extension(l.feed.clone()));
     }
     let app = app.layer(SetSensitiveRequestHeadersLayer::new([
         header::AUTHORIZATION,
     ]));
+
+    let app = match hardening.cors_layer() {
+        Some(cors) => {
+            tracing::info!(
+                origins = hardening.cors_origins.len(),
+                "CORS enabled for the configured origins"
+            );
+            app.layer(cors)
+        }
+        None => {
+            tracing::info!(
+                "CORS is off: browsers on other origins are refused (KUKI_CORS_ORIGINS allows some)"
+            );
+            app
+        }
+    };
 
     let listener = tokio::net::TcpListener::bind(bind)
         .await

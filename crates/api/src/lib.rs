@@ -9,6 +9,7 @@ pub mod config;
 pub mod error;
 pub mod events;
 pub mod graphql;
+pub mod hardening;
 pub mod links;
 pub mod objects;
 pub mod observe;

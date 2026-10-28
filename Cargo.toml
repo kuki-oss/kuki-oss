@@ -46,7 +46,7 @@ axum = { version = "0.8", features = ["ws"] }
 hmac = "0.12"
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.7.1", features = ["sensitive-headers"] }
+tower-http = { version = "0.7.1", features = ["sensitive-headers", "cors"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "ansi"] }
 subtle = "2"
