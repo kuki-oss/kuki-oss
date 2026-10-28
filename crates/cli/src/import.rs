@@ -1,6 +1,8 @@
 //! `kuki import ...`: spreadsheets (CSV, XLSX) as ingest input.
 //!
-//! `check` reads a file and shows what a mapping makes of it. It never touches the database.
+//! `check` shows what a mapping makes of a file and never touches the database. `run` loads the
+//! file through the ingest pipeline: rows that cannot be converted or are refused by the pipeline
+//! are quarantined with the reason, and the rest are written.
 
 use std::{
     error::Error,
@@ -10,9 +12,15 @@ use std::{
 
 use clap::Subcommand;
 use kuki_ingest::{
+    IngestContext, IngestOptions,
     body::RowContent,
-    files::{FileFormat, MAX_FILE_BYTES, Mapping, convert, read_table},
+    files::{
+        FileFormat, MAX_FILE_BYTES, Mapping, Table, convert, idempotency_key, load_rows, read_table,
+    },
 };
+use serde_json::json;
+
+use crate::webhooks::{connect, session};
 
 type Res = Result<(), Box<dyn Error>>;
 
@@ -36,9 +44,30 @@ pub enum ImportCmd {
         #[arg(long, default_value_t = 5)]
         limit: usize,
     },
+    /// Load a file through the ingest pipeline. Importing the same file with the same mapping
+    /// again changes nothing.
+    Run {
+        /// A .csv or .xlsx file.
+        file: PathBuf,
+        /// Organisation slug or id.
+        #[arg(long)]
+        org: String,
+        /// The mapping file (JSON).
+        #[arg(long)]
+        mapping: PathBuf,
+        /// Worksheet name (.xlsx only; default: the first sheet).
+        #[arg(long)]
+        sheet: Option<String>,
+        /// Exit with an error if any row was rejected (the other rows are still written).
+        #[arg(long)]
+        strict: bool,
+        /// Audit source recorded on the batch.
+        #[arg(long, default_value = "cli:import")]
+        source: String,
+    },
 }
 
-pub fn run(cmd: ImportCmd) -> Res {
+pub async fn run(cmd: ImportCmd) -> Res {
     match cmd {
         ImportCmd::Check {
             file,
@@ -46,7 +75,22 @@ pub fn run(cmd: ImportCmd) -> Res {
             sheet,
             limit,
         } => check(&file, &mapping, sheet.as_deref(), limit),
+        ImportCmd::Run {
+            file,
+            org,
+            mapping,
+            sheet,
+            strict,
+            source,
+        } => load(&file, &org, &mapping, sheet.as_deref(), strict, &source).await,
     }
+}
+
+struct Input {
+    mapping: Mapping,
+    mapping_bytes: Vec<u8>,
+    file_bytes: Vec<u8>,
+    table: Table,
 }
 
 fn read_limited(path: &Path, max: u64, what: &str) -> Result<Vec<u8>, Box<dyn Error>> {
@@ -59,14 +103,29 @@ fn read_limited(path: &Path, max: u64, what: &str) -> Result<Vec<u8>, Box<dyn Er
     Ok(fs::read(path).map_err(|e| format!("cannot read the {what} {}: {e}", path.display()))?)
 }
 
-fn check(file: &Path, mapping_path: &Path, sheet: Option<&str>, limit: usize) -> Res {
-    let mapping = Mapping::parse(&read_limited(mapping_path, MAX_MAPPING_BYTES, "mapping")?)?;
+fn read_input(
+    file: &Path,
+    mapping_path: &Path,
+    sheet: Option<&str>,
+) -> Result<Input, Box<dyn Error>> {
+    let mapping_bytes = read_limited(mapping_path, MAX_MAPPING_BYTES, "mapping")?;
+    let mapping = Mapping::parse(&mapping_bytes)?;
     let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("");
     let format = FileFormat::from_extension(ext)
         .ok_or_else(|| format!("unsupported file type `.{ext}`; use .csv or .xlsx"))?;
-    let bytes = read_limited(file, MAX_FILE_BYTES as u64, "file")?;
-    let table = read_table(&bytes, format, sheet)?;
-    let rows = convert(&mapping, &table)?;
+    let file_bytes = read_limited(file, MAX_FILE_BYTES as u64, "file")?;
+    let table = read_table(&file_bytes, format, sheet)?;
+    Ok(Input {
+        mapping,
+        mapping_bytes,
+        file_bytes,
+        table,
+    })
+}
+
+fn check(file: &Path, mapping_path: &Path, sheet: Option<&str>, limit: usize) -> Res {
+    let input = read_input(file, mapping_path, sheet)?;
+    let rows = convert(&input.mapping, &input.table)?;
 
     let mut converted = Vec::new();
     let mut problems = Vec::new();
@@ -77,7 +136,8 @@ fn check(file: &Path, mapping_path: &Path, sheet: Option<&str>, limit: usize) ->
         }
     }
 
-    let columns: Vec<&str> = table
+    let columns: Vec<&str> = input
+        .table
         .header
         .iter()
         .map(String::as_str)
@@ -104,6 +164,69 @@ fn check(file: &Path, mapping_path: &Path, sheet: Option<&str>, limit: usize) ->
             "{} of {} rows could not be converted",
             problems.len(),
             rows.len()
+        )
+        .into());
+    }
+    Ok(())
+}
+
+async fn load(
+    file: &Path,
+    org: &str,
+    mapping_path: &Path,
+    sheet: Option<&str>,
+    strict: bool,
+    source: &str,
+) -> Res {
+    let input = read_input(file, mapping_path, sheet)?;
+    let rows = convert(&input.mapping, &input.table)?;
+    let total = rows.len();
+    let key = idempotency_key(&input.file_bytes, &input.mapping_bytes, sheet);
+
+    let (org_id, pool) = connect(org).await?;
+    let ctx = IngestContext {
+        org: org_id,
+        session: session(org_id),
+        source: source.to_owned(),
+        idempotency_key: key,
+        backfill_id: None,
+    };
+    let summary = load_rows(&pool, ctx, &input.mapping, rows, &IngestOptions::default()).await?;
+
+    let rejected: Vec<_> = summary
+        .rejected
+        .iter()
+        .map(|r| {
+            json!({
+                "row": r.index + 1,
+                "code": r.code,
+                "message": r.message,
+                "field": r.field,
+                "quarantineId": r.quarantine_id,
+            })
+        })
+        .collect();
+    let out = json!({
+        "kind": summary.kind,
+        "batchId": summary.batch_id,
+        "rows": total,
+        "accepted": summary.accepted,
+        "created": summary.created,
+        "updated": summary.updated,
+        "unchanged": summary.unchanged,
+        "rejected": rejected,
+    });
+    println!("{}", serde_json::to_string_pretty(&out)?);
+    eprintln!(
+        "imported {} of {total} rows; {} rejected",
+        summary.accepted,
+        summary.rejected.len()
+    );
+    if strict && !summary.rejected.is_empty() {
+        return Err(format!(
+            "{} rows were rejected (the other {} were written)",
+            summary.rejected.len(),
+            summary.accepted
         )
         .into());
     }

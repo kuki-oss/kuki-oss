@@ -19,6 +19,8 @@ thiserror.workspace = true
 uuid.workspace = true
 csv = { workspace = true, optional = true }
 calamine = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio.workspace = true
@@ -28,4 +30,4 @@ rust_xlsxwriter.workspace = true
 workspace = true
 
 [features]
-files = ["dep:csv", "dep:calamine"]
+files = ["dep:csv", "dep:calamine", "dep:sha2", "dep:hex"]

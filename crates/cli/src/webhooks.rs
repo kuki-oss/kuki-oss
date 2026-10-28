@@ -210,7 +210,7 @@ pub async fn run(cmd: WebhooksCmd) -> Res {
     Ok(())
 }
 
-fn session(org_id: Uuid) -> OrgSession {
+pub(crate) fn session(org_id: Uuid) -> OrgSession {
     OrgSession {
         org_id,
         scope_path: None,
@@ -219,7 +219,7 @@ fn session(org_id: Uuid) -> OrgSession {
 
 /// Resolve the organisation with the owner connection (as `evaluate once` does), then
 /// return a pool that works under row-level security as the application role.
-async fn connect(org: &str) -> Result<(Uuid, PgPool), Box<dyn Error>> {
+pub(crate) async fn connect(org: &str) -> Result<(Uuid, PgPool), Box<dyn Error>> {
     let owner = ApiConfig::read_setting("KUKI_MIGRATE_DATABASE_URL")?
         .ok_or("missing required setting KUKI_MIGRATE_DATABASE_URL")?;
     let owner_pool = PgPoolOptions::new()

@@ -123,7 +123,7 @@ async fn main() -> ExitCode {
         Command::Actions { cmd } => run_actions(cmd).await,
         Command::Webhooks { cmd } => webhooks::run(cmd).await,
         Command::Shadow { cmd } => run_shadow(cmd).await,
-        Command::Import { cmd } => import::run(cmd),
+        Command::Import { cmd } => import::run(cmd).await,
     };
 
     match result {
